@@ -1498,7 +1498,11 @@
     state.theme = state.settings.panelTheme || 'auto';
     state.size = state.settings.panelSize || null;
 
-    if (!hostAllowed(state.settings, location.hostname)) return;
+    // Erst prüfen, dann lesen: ohne Freigabe wird die Seite nicht angefasst.
+    if (!urlAllowed(state.settings, location.href)) {
+      removeUi();
+      return;
+    }
 
     const docs = findDocuments();
     if (!docs.length) return;
@@ -1529,20 +1533,54 @@
     }
   }
 
-  function hostAllowed(settings, hostname) {
-    const host = (hostname || '').toLowerCase();
-    const match = (list) =>
-      (list || []).some((entry) => {
-        const e = String(entry).trim().toLowerCase().replace(/^\*\./, '');
-        return e && (host === e || host.endsWith('.' + e));
-      });
-    if (settings.domainMode === 'allowlist') return match(settings.allowlist);
-    if (settings.domainMode === 'blocklist') return !match(settings.blocklist);
-    return true;
+  /**
+   * Autosmaya arbeitet nur auf den freigegebenen Adressen. Der Host ist zusätzlich
+   * im Manifest festgeschrieben; diese Prüfung schränkt auf die Fahrzeugseiten ein.
+   * Spiegelt urlAllowed() aus lib/config.js - Content-Scripts können nicht importieren.
+   */
+  function urlAllowed(settings, href) {
+    const prefixes = settings?.urlPrefixes?.length
+      ? settings.urlPrefixes
+      : ['https://de.bca-europe.com/lot?id'];
+    let url;
+    try {
+      url = new URL(href);
+    } catch {
+      return false;
+    }
+
+    for (const raw of prefixes) {
+      const prefix = String(raw).trim();
+      if (!prefix) continue;
+      if (href.startsWith(prefix)) return true;
+
+      let ref;
+      try {
+        ref = new URL(prefix);
+      } catch {
+        continue;
+      }
+      if (url.origin !== ref.origin) continue;
+      if (url.pathname.replace(/\/+$/, '') !== ref.pathname.replace(/\/+$/, '')) continue;
+      const param = prefix.match(/[?&]([A-Za-z0-9_-]+)$/)?.[1];
+      if (!param) return true;
+      if (url.searchParams.has(param)) return true;
+    }
+    return false;
   }
 
   let lastScanAt = 0;
   const SCAN_COOLDOWN_MS = 2500;
+
+  function removeUi() {
+    if (!ui) return;
+    ui.host.remove();
+    ui = null;
+    state.status = 'idle';
+    state.result = null;
+    state.pageKey = '';
+    send({ type: 'CLEAR_BADGE' });
+  }
 
   function scheduleScan(auto = true, { immediate = false } = {}) {
     if (state.status === 'busy') return;

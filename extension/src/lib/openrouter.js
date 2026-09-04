@@ -18,6 +18,9 @@ export class OpenRouterError extends Error {
 
 function friendly(status, body) {
   const detail = body?.error?.message || body?.message || '';
+  if (/not a valid model|no endpoints found|model not found|unknown model/i.test(detail)) {
+    return `Modell nicht gefunden: ${detail} Bitte die Modell-ID in den Einstellungen prüfen (Schreibweise wie auf openrouter.ai/models).`;
+  }
   switch (status) {
     case 401:
       return 'API-Key ungültig oder fehlt. Bitte in den Einstellungen prüfen.';
@@ -112,10 +115,11 @@ export async function chat({
       if (!res.ok) {
         const msg = friendly(res.status, json);
         // Manche Provider lehnen json_schema ab -> einmal ohne Schema versuchen.
+        // Nicht jedes Modell beherrscht Structured Outputs - dann einmal ohne Schema.
         const schemaIssue =
           useSchema &&
-          res.status === 400 &&
-          /schema|response_format|structured/i.test(raw || '');
+          (res.status === 400 || res.status === 404 || res.status === 422) &&
+          /schema|response_format|structured|json_schema|not support/i.test(raw || '');
         if (schemaIssue) {
           useSchema = false;
           continue;
@@ -194,6 +198,7 @@ function normalizeUsage(usage, modelId) {
     const p = priceFor(modelId);
     if (p) cost = (promptTokens / 1e6) * p.in + (completionTokens / 1e6) * p.out;
   }
+  if (!Number.isFinite(cost)) cost = null;
   return { promptTokens, completionTokens, cost };
 }
 

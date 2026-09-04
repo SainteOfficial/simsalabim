@@ -102,7 +102,6 @@ report = text_page([
     (60, 456, 10, 'Gesamtkosten Instandsetzung: 1830,00 EUR'),
 ])
 write('zustandsbericht.pdf', build_pdf([report]))
-write('newsletter.pdf', build_pdf([text_page([(60, 780, 12, 'Newsletter Ausgabe 4')])]))
 
 # 2) Reiner Scan: nur ein Bild, keine Textebene
 img = image_object(300, 420)

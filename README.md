@@ -1,9 +1,12 @@
 # Autosmaya
 
-Chrome-Extension für Auktions- und Händlerportale (u. a. **BCA**): findet auf der
-Fahrzeugseite automatisch **Fahrzeug PDF**, **Appraisal** und **Zustandsbericht**, lädt die
-PDFs, liest sie **vollständig** aus und zeigt die Mängel in einem Panel oben rechts – ohne
-dass man suchen muss.
+Chrome-Extension für **BCA Europe**: findet auf der Fahrzeugseite automatisch
+**Fahrzeug PDF**, **Appraisal** und **Zustandsbericht**, lädt die PDFs, liest sie
+**vollständig** aus und zeigt die Mängel in einem Panel oben rechts – ohne dass man
+suchen muss.
+
+Autosmaya wird ausschließlich auf `https://de.bca-europe.com/lot?id…` aktiv. Auf jeder
+anderen Adresse liest sie die Seite nicht und lädt kein PDF – siehe [Zugriff](#zugriff).
 
 Das Panel hat drei Tabs. **Was aufpoppt, sind die Mängel** – nüchtern und ohne Bewertung.
 Die Rechnung und die Einschätzung liegen jeweils einen Klick daneben.
@@ -23,19 +26,18 @@ Mängel, nicht das Urteil.
 
 ## Was die Extension macht
 
-0. **Sofort sichtbar** – zeigt Schäden, die das Portal bereits auf der Seite listet, direkt
-   im Panel an („Direkt von der Seite"), noch bevor das PDF ausgewertet ist. Auf BCA sind das
-   die Einträge unter *Schäden*.
-1. **Erkennen** – findet auf jeder Seite Links wie „Fahrzeug PDF", „Appraisal",
+0. **Sofort sichtbar** – zeigt Schäden, die BCA bereits auf der Seite listet, direkt im Panel
+   an („Direkt von der Seite"), noch bevor das PDF ausgewertet ist – die Einträge unter *Schäden*.
+1. **Erkennen** – findet auf der Losseite Links wie „Fahrzeug PDF", „Appraisal",
    „Zustandsbericht", „Gutachten", „Prüfbericht" oder beliebige `.pdf`-Links und liest nebenbei
    FIN, Kilometerstand, Erstzulassung und Preis aus der Seite.
-   Ein Panel erscheint nur, wenn die Seite wirklich nach einem Fahrzeug aussieht – kein
-   Aufpoppen auf Blogs oder Preislisten.
+   Ohne gefundenes Dokument erscheint kein Panel.
 2. **Laden** – holt die PDFs zuerst im Seitenkontext (nutzt also die bestehende Anmeldung
    beim Händler-/Auktionsportal) und fällt bei CORS-Blockaden auf den Hintergrunddienst zurück.
 3. **Lesen** – extrahiert den Text lokal mit **pdf.js**, spaltenerhaltend, damit Tabellen aus
    Zustandsberichten erhalten bleiben. Siehe [Vollständigkeit](#vollständigkeit).
-4. **Analysieren** – OpenRouter mit **Structured Output** (JSON-Schema), `temperature: 0`.
+4. **Analysieren** – OpenRouter (Standard `amazon/nova-2-lite-v1`) mit **Structured Output**
+   (JSON-Schema), `temperature: 0`.
    Das Modell darf nichts erfinden und muss zu jedem Mangel ein wörtliches Zitat als Beleg liefern.
 5. **Anzeigen** – Panel oben rechts: Kaufempfehlung, Zustands-Score, Kostenrechnung, Mängel
    nach Schwere sortiert und filterbar, TÜV-Relevanz, Reifenprofil, Verhandlungshebel,
@@ -67,20 +69,32 @@ Dazu gibt es:
 Das Urteil bewertet ausschließlich den **dokumentierten** Zustand. Es ersetzt keine
 Besichtigung und keine Probefahrt – das steht auch im Tab selbst.
 
-## BCA
+## Zugriff
 
-Für BCA ist ein eigenes Profil hinterlegt (`bca.com`, `bca.de`, `bca.co.uk` und weitere):
+Autosmaya ist bewusst eng eingezäunt. Zwei Schranken, die zweite kann die erste nicht öffnen:
 
-- Die BCA-Bezeichnungen **Appraisal**, **Fahrzeug PDF** und **Schadenaufstellung** zählen dort
+1. **Im Manifest** stehen als einzige Berechtigungen `https://de.bca-europe.com/*`,
+   `https://*.bca-europe.com/*` (für PDFs auf Nachbar-Hosts) und `https://openrouter.ai/*`.
+   Chrome injiziert das Content-Script nirgendwo sonst – auch nicht auf anderen BCA-Domains.
+2. **In den Einstellungen** steht die Adressliste, standardmäßig
+   `https://de.bca-europe.com/lot?id`. Erst wenn die aktuelle Adresse dazu passt, wird die
+   Seite überhaupt gelesen. Endet ein Eintrag auf `?name`, muss dieser Parameter vorhanden
+   sein – die Reihenfolge der Parameter ist egal.
+
+Damit passiert auf `de.bca-europe.com/` (Startseite), `…/lot` ohne `id` oder `…/suche?id=1`
+nichts: kein Auslesen, kein Download, kein Panel. Der Test prüft jeden dieser Fälle einzeln.
+
+Die Berechtigungen der Extension sind entsprechend knapp: `storage`, `offscreen`,
+`unlimitedStorage` – kein `tabs`, kein `activeTab`, kein `scripting`, kein `<all_urls>`.
+
+### BCA-Besonderheiten
+
+- Die BCA-Bezeichnungen **Appraisal**, **Fahrzeug PDF** und **Schadenaufstellung** zählen
   direkt als Zustandsbericht.
-- Auf einer erkannten BCA-Domain reicht ein gefundenes Dokument – es müssen nicht erst
-  mehrere Fahrzeugmerkmale zusammenkommen.
 - Der Abschnitt **Schäden** der Seite wird ausgelesen und sofort angezeigt, inklusive
   Tabellen der Form „Bauteil / Beschreibung".
-
-Weitere Portale lassen sich in `PORTALS` (in `src/content/content.js`) mit wenigen Zeilen
-ergänzen. Ohne Profil greift die allgemeine Erkennung, die auf den gängigen Portalen ebenfalls
-funktioniert.
+- Weitere Adressen lassen sich in den Einstellungen ergänzen, solange sie auf
+  `de.bca-europe.com` liegen; für andere Hosts müsste zusätzlich das Manifest erweitert werden.
 
 ## Berechnet
 
@@ -152,30 +166,35 @@ Der Anspruch ist, dass wirklich das ganze Dokument ankommt – nicht die ersten 
 3. **Entpackte Erweiterung laden** → den Ordner `extension/` auswählen.
 4. Die Optionsseite öffnet sich automatisch. Dort den OpenRouter-API-Key eintragen
    (erstellen auf [openrouter.ai/keys](https://openrouter.ai/keys)) und auf **Speichern** klicken.
-   Mit **Testen** lässt sich die Verbindung sofort prüfen.
+   Mit **Testen** lässt sich Key und Modell-ID sofort prüfen.
+
+Der Key gehört **nicht** ins Repository und steht in keiner Datei dieses Projekts – er wird
+nur auf der Optionsseite eingegeben.
 
 Der Key wird ausschließlich lokal in `chrome.storage.local` gespeichert und nur an OpenRouter
 gesendet. Fahrzeugseiten und PDFs gehen an keinen anderen Server.
 
-Danach passiert alles von selbst: Fahrzeugseite öffnen → Panel erscheint → Urteil steht da.
+Danach passiert alles von selbst: Fahrzeugseite auf BCA öffnen → Panel erscheint →
+die Mängel stehen da.
 
 <p><img src="docs/panel-instant.png" width="300" alt="Schäden direkt von der Seite, noch während der Analyse"></p>
 
 ## Kosten und Modellwahl
 
-**Ja, GPT-4o mini reicht für Text-PDFs.** Zustandsberichte sind Fließtext und Tabellen; die
-Arbeit macht ohnehin pdf.js, das Modell muss nur strukturieren und bewerten. Mit
-`temperature: 0` und JSON-Schema ist die Ausgabe stabil.
+Voreingestellt ist **`amazon/nova-2-lite-v1`** für Text-PDFs und für gescannte PDFs.
 
-| Fall | Modell | Kosten pro Fahrzeug |
-| --- | --- | --- |
-| PDF mit Textlayer (Normalfall) | `openai/gpt-4o-mini` | rund **0,1 Cent** |
-| Langer Bericht in mehreren Teilen | `openai/gpt-4o-mini` | pro Teil noch einmal so viel |
-| Gescanntes PDF (Bilderkennung) | `openai/gpt-4o-mini` | ca. 2–4 Cent (Bilder kosten viele Tokens) |
-| Gescanntes PDF, günstiger + besseres OCR | `google/gemini-2.0-flash-001` | Bruchteil davon |
+Das Modellfeld ist ein freies Textfeld mit Vorschlagsliste: Es lässt sich jede Modell-ID von
+[openrouter.ai/models](https://openrouter.ai/models) eintragen, exakt in deren Schreibweise.
+Passt die ID nicht, sagt das Panel das im Klartext („Modell nicht gefunden …"); mit **Testen**
+auf der Optionsseite lässt sich das vorab prüfen.
 
-Empfehlung: Textmodell auf GPT-4o mini lassen, für gescannte PDFs in den Optionen
-Gemini 2.0 Flash als Scan-Modell wählen.
+Beherrscht ein Modell keine Structured Outputs, wiederholt Autosmaya die Anfrage automatisch
+im JSON-Modus – die Auswertung läuft also auch dann.
+
+Die Kosten meldet OpenRouter je Aufruf zurück; sie stehen unten im Panel. Für Modelle mit
+hinterlegtem Preis (z. B. GPT-4o mini: rund **0,1 Cent** pro Fahrzeug) zeigt die Optionsseite
+zusätzlich eine Vorabschätzung. Für gescannte PDFs ist `google/gemini-2.0-flash-001` eine
+günstige Alternative mit starkem OCR.
 
 Zusätzlich spart die Extension automatisch:
 
@@ -191,13 +210,13 @@ Zusätzlich spart die Extension automatisch:
 | Einstellung | Bedeutung |
 | --- | --- |
 | API-Key / API-Endpunkt | OpenRouter-Zugang; Endpunkt nur ändern, wenn ein eigener Proxy genutzt wird |
-| Modell / Scan-Modell | getrennte Modelle für Text-PDFs und gescannte PDFs |
+| Modell / Scan-Modell | frei eintragbare OpenRouter-Modell-IDs, getrennt für Text und Scans |
 | Automatisch starten | Analyse startet ohne Klick, sobald eine Fahrzeugseite erkannt wird |
 | Links markieren | farbiger Rahmen um die erkannten Dokument-Links auf der Seite |
 | Bilderkennung + max. Seiten | Bildauswertung für Scans und textlose Seiten, mit Kostendeckel |
 | Zeichen pro KI-Aufruf | ab wann ein Dokument in Teilen ausgewertet wird (Standard 120.000) |
 | Sprache der Ausgabe | Deutsch oder Englisch |
-| Modus / Domains | überall, nur auf bestimmten Domains oder überall außer bestimmten Domains |
+| Erlaubte Adressen | auf welchen BCA-Adressen Autosmaya arbeiten darf |
 | Zusätzliche Stichwörter | für ungewöhnlich benannte Links |
 | Cache | Größe ansehen und leeren |
 
@@ -237,7 +256,7 @@ node test/e2e.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension
-ungepackt in Chromium und prüft 90 Punkte, unter anderem:
+ungepackt in Chromium und prüft 95 Punkte, unter anderem:
 
 - Erkennung von Fahrzeugseiten und Fehlalarm-Freiheit auf Blog/Preisliste
 - PDF-Download und Textextraktion inklusive erhaltener Tabellenspalten
@@ -249,12 +268,18 @@ ungepackt in Chromium und prüft 90 Punkte, unter anderem:
 - Cache-Treffer ohne zweiten API-Aufruf, auch für Scan- und Hybrid-Dokumente
 - **Berechnet**: belegte Summe, sicherheitsrelevanter Anteil, Effektivpreis und
   Verhandlungsziel gegen erwartete Beträge geprüft
-- **BCA**: Der Test leitet `www.bca.com` auf den Fixture-Server um und prüft Portal-Erkennung,
-  „Appraisal" als Zustandsbericht und die sofort angezeigten Schäden von der Seite
+- **Zugriff**: Der Test leitet `de.bca-europe.com` per HTTPS auf den Fixture-Server um und
+  prüft einzeln, dass auf Startseite, `/lot` ohne `id`, `/suche?id=1` und einer fremden Domain
+  weder Panel noch Zugriff entsteht – und dass die Parameterreihenfolge egal ist
+- **BCA**: „Appraisal" als Zustandsbericht und die sofort angezeigten Schäden von der Seite
 - Tabs: Start auf „Mängel", keine Bewertung dort, Morph der Höhe, wandernder Tab-Blob
 - Suche, Sortierung nach Kosten, Seitensprung, Theme-Schalter, Link-Markierung,
   Toolbar-Abzeichen, Rückhol-Pille, Esc-Kürzel, Popup-Zustand
 - Aufklapp-Animation, Filter, Einklappen, Optionsseite, reduzierte Bewegung, keine SW-Fehler
+
+Beim ersten Lauf erzeugt der Test mit `openssl` ein selbstsigniertes Wegwerf-Zertifikat für
+`de.bca-europe.com` unter `test/fixtures/cert/` (nicht eingecheckt) und startet den Browser
+ohne Umgebungs-Proxy.
 
 Ist Chromium an einem anderen Ort installiert: `CHROME_PATH=/pfad/zu/chrome node test/e2e.mjs`.
 Mit `MOCK_DELAY_MS=2000` lässt sich der Ladezustand in Ruhe betrachten.

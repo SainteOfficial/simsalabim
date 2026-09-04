@@ -14,31 +14,32 @@ const FIELDS = {
   visionMaxPages: 'number',
   maxChars: 'number',
   outputLanguage: 'value',
-  domainMode: 'value',
-  allowlist: 'lines',
-  blocklist: 'lines',
+  urlPrefixes: 'lines',
   keywords: 'lines'
 };
 
 function fillModels() {
-  for (const id of ['model', 'visionModel']) {
-    const select = $(id);
-    select.innerHTML = MODELS.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
-  }
+  $('modelList').innerHTML = MODELS.map(
+    (m) => `<option value="${m.id}">${m.label}</option>`
+  ).join('');
 }
 
 function showPrice() {
-  const p = priceFor($('model').value);
-  $('modelPrice').textContent = p
-    ? `ca. $${p.in.toFixed(2)} pro 1 Mio. Eingabe-Tokens · $${p.out.toFixed(2)} pro 1 Mio. Ausgabe-Tokens ` +
-      '– ein Zustandsbericht kostet damit meist unter 1 Cent.'
-    : '';
-}
-
-function toggleDomainFields() {
-  const mode = $('domainMode').value;
-  $('allowField').hidden = mode !== 'allowlist';
-  $('blockField').hidden = mode !== 'blocklist';
+  const id = $('model').value.trim();
+  const p = priceFor(id);
+  const known = MODELS.find((m) => m.id === id);
+  if (p) {
+    $('modelPrice').textContent =
+      `ca. $${p.in.toFixed(2)} pro 1 Mio. Eingabe-Tokens · $${p.out.toFixed(2)} pro 1 Mio. ` +
+      'Ausgabe-Tokens – ein Zustandsbericht kostet damit meist unter 1 Cent.';
+  } else if (known) {
+    $('modelPrice').textContent =
+      'Preis wird von OpenRouter je Aufruf gemeldet und unten im Panel angezeigt.';
+  } else {
+    $('modelPrice').textContent =
+      'Freies Modell – die Modell-ID muss genau der Schreibweise auf openrouter.ai/models entsprechen. ' +
+      'Mit „Testen" prüfen.';
+  }
 }
 
 async function load() {
@@ -52,7 +53,6 @@ async function load() {
     else el.value = s[key] ?? '';
   }
   showPrice();
-  toggleDomainFields();
   refreshCache();
 }
 
@@ -86,8 +86,7 @@ async function refreshCache() {
 }
 
 $('save').addEventListener('click', save);
-$('model').addEventListener('change', showPrice);
-$('domainMode').addEventListener('change', toggleDomainFields);
+$('model').addEventListener('input', showPrice);
 
 $('toggleKey').addEventListener('click', () => {
   const input = $('apiKey');

@@ -2,18 +2,18 @@
   "manifest_version": 3,
   "name": "Autosmaya",
   "short_name": "Autosmaya",
-  "version": "1.1.0",
-  "description": "Liest Fahrzeug-PDF und Zustandsbericht automatisch aus, listet alle Mängel, rechnet die Kosten und gibt eine Kaufempfehlung.",
+  "version": "1.2.0",
+  "description": "Liest auf de.bca-europe.com den Zustandsbericht automatisch aus, listet alle Mängel, rechnet die Kosten und gibt eine Kaufempfehlung.",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
     "offscreen",
-    "scripting",
-    "activeTab",
     "unlimitedStorage"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "https://de.bca-europe.com/*",
+    "https://*.bca-europe.com/*",
+    "https://openrouter.ai/*"
   ],
   "background": {
     "service_worker": "src/background.js",
@@ -22,8 +22,7 @@
   "content_scripts": [
     {
       "matches": [
-        "http://*/*",
-        "https://*/*"
+        "https://de.bca-europe.com/*"
       ],
       "js": [
         "src/content/content.js"
@@ -56,8 +55,7 @@
         "icons/*"
       ],
       "matches": [
-        "http://*/*",
-        "https://*/*"
+        "https://de.bca-europe.com/*"
       ]
     }
   ],

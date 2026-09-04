@@ -19,8 +19,8 @@
         </div>
         <div>
           <h1>Autosmaya</h1>
-          <p>Liest Fahrzeug-PDF und Zustandsbericht automatisch aus, listet alle Mängel,
-            rechnet die Kosten und gibt eine Kaufempfehlung.</p>
+          <p>Liest auf <code>de.bca-europe.com</code> den Zustandsbericht automatisch aus,
+            listet alle Mängel, rechnet die Kosten und gibt eine Kaufempfehlung.</p>
         </div>
       </header>
 
@@ -48,15 +48,18 @@
 
         <label class="field">
           <span class="label">Modell für Text-PDFs</span>
-          <select id="model"></select>
+          <input id="model" list="modelList" spellcheck="false" autocomplete="off"
+            placeholder="amazon/nova-2-lite-v1" />
           <small id="modelPrice"></small>
         </label>
 
         <label class="field">
           <span class="label">Modell für gescannte PDFs (Bilderkennung)</span>
-          <select id="visionModel"></select>
+          <input id="visionModel" list="modelList" spellcheck="false" autocomplete="off"
+            placeholder="amazon/nova-2-lite-v1" />
           <small>Wird nur genutzt, wenn im PDF kein Text steckt. Bilder kosten deutlich mehr Tokens.</small>
         </label>
+        <datalist id="modelList"></datalist>
       </section>
 
       <section class="card">
@@ -104,28 +107,22 @@
       </section>
 
       <section class="card">
-        <h2>Wo soll die Extension laufen?</h2>
+        <h2>Wo Autosmaya arbeitet</h2>
+        <p class="hint">Autosmaya kann ausschließlich auf <code>de.bca-europe.com</code> laufen –
+          das steht fest im Manifest und lässt sich hier nicht ausweiten. Die Liste unten
+          schränkt zusätzlich auf die Fahrzeugseiten ein. Auf allen anderen Adressen wird
+          weder die Seite gelesen noch ein PDF geladen.</p>
         <label class="field">
-          <span class="label">Modus</span>
-          <select id="domainMode">
-            <option value="all">Auf allen Seiten</option>
-            <option value="allowlist">Nur auf diesen Domains</option>
-            <option value="blocklist">Überall außer auf diesen Domains</option>
-          </select>
-        </label>
-        <label class="field" id="allowField" hidden>
-          <span class="label">Erlaubte Domains (eine pro Zeile)</span>
-          <textarea id="allowlist" rows="4" placeholder="auktion.example.com"></textarea>
-        </label>
-        <label class="field" id="blockField" hidden>
-          <span class="label">Gesperrte Domains (eine pro Zeile)</span>
-          <textarea id="blocklist" rows="4" placeholder="mail.google.com"></textarea>
+          <span class="label">Erlaubte Adressen (eine pro Zeile)</span>
+          <textarea id="urlPrefixes" rows="3" spellcheck="false"></textarea>
+          <small>Endet ein Eintrag auf <code>?name</code>, muss dieser Parameter in der Adresse
+            vorkommen – Reihenfolge egal.</small>
         </label>
         <label class="field">
           <span class="label">Zusätzliche Link-Stichwörter (eine pro Zeile)</span>
-          <textarea id="keywords" rows="5"></textarea>
-          <small>Nur nötig für ungewöhnliche Bezeichnungen. Zustandsbericht, Fahrzeug PDF, Appraisal,
-            Gutachten, Prüfbericht, Datenblatt &amp; Co. erkennt die Extension bereits von selbst.</small>
+          <textarea id="keywords" rows="4"></textarea>
+          <small>Nur nötig für ungewöhnliche Bezeichnungen. Appraisal, Fahrzeug PDF,
+            Zustandsbericht, Schadenaufstellung &amp; Co. erkennt Autosmaya bereits von selbst.</small>
         </label>
       </section>
 

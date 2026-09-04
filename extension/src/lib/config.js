@@ -6,8 +6,8 @@
 export const DEFAULTS = {
   apiKey: '',
   apiBase: 'https://openrouter.ai/api/v1',
-  model: 'openai/gpt-4o-mini',
-  visionModel: 'openai/gpt-4o-mini',
+  model: 'amazon/nova-2-lite-v1',
+  visionModel: 'amazon/nova-2-lite-v1',
   autoRun: true,
   visionFallback: true,
   visionMaxPages: 6,
@@ -18,9 +18,11 @@ export const DEFAULTS = {
   panelTheme: 'auto',
   panelSize: null,
   markLinks: true,
-  domainMode: 'all', // 'all' | 'allowlist' | 'blocklist'
-  allowlist: [],
-  blocklist: [],
+  /**
+   * Autosmaya wird nur auf diesen Adressen aktiv. Der Host selbst ist zusätzlich im
+   * Manifest festgeschrieben - hier lässt sich nur weiter einschränken, nicht ausweiten.
+   */
+  urlPrefixes: ['https://de.bca-europe.com/lot?id'],
   /** Nur ZUSAETZLICHE Stichwoerter des Nutzers - die gaengigen sind im Content-Script eingebaut. */
   keywords: [],
   cacheEnabled: true,
@@ -28,18 +30,29 @@ export const DEFAULTS = {
   debug: false
 };
 
-/** Modelle, die in den Optionen zur Auswahl stehen. Preise in USD pro 1 Mio Tokens. */
+/**
+ * Vorschläge für die Modellwahl. Die Felder in/out sind USD pro 1 Mio. Tokens und dienen
+ * nur der Vorschau - abgerechnet wird, was OpenRouter je Aufruf zurückmeldet.
+ * Das Modellfeld ist frei beschreibbar, hier stehen nur die Vorschläge.
+ */
 export const MODELS = [
   {
+    id: 'amazon/nova-2-lite-v1',
+    label: 'Amazon Nova 2 Lite (Standard)',
+    in: null,
+    out: null,
+    vision: true
+  },
+  {
     id: 'openai/gpt-4o-mini',
-    label: 'GPT-4o mini (Standard – günstig & schnell)',
+    label: 'GPT-4o mini (bewährt, günstig)',
     in: 0.15,
     out: 0.6,
     vision: true
   },
   {
     id: 'google/gemini-2.0-flash-001',
-    label: 'Gemini 2.0 Flash (sehr günstig, starkes OCR)',
+    label: 'Gemini 2.0 Flash (starkes OCR für Scans)',
     in: 0.1,
     out: 0.4,
     vision: true
@@ -53,22 +66,16 @@ export const MODELS = [
   },
   {
     id: 'anthropic/claude-3.5-haiku',
-    label: 'Claude 3.5 Haiku (sehr sorgfältig bei Tabellen)',
+    label: 'Claude 3.5 Haiku (sorgfältig bei Tabellen)',
     in: 0.8,
     out: 4.0,
-    vision: true
-  },
-  {
-    id: 'openai/gpt-4o',
-    label: 'GPT-4o (teuer – nur für schwierige Scans)',
-    in: 2.5,
-    out: 10.0,
     vision: true
   }
 ];
 
 export function priceFor(modelId) {
-  return MODELS.find((m) => m.id === modelId) || null;
+  const m = MODELS.find((x) => x.id === modelId);
+  return m && typeof m.in === 'number' && typeof m.out === 'number' ? m : null;
 }
 
 export async function getSettings() {
@@ -84,17 +91,37 @@ export async function setSettings(patch) {
   await chrome.storage.local.set(patch);
 }
 
-/** Prüft, ob die Extension auf diesem Host laufen darf. */
-export function hostAllowed(settings, hostname) {
-  const host = (hostname || '').toLowerCase();
-  const match = (list) =>
-    (list || []).some((entry) => {
-      const e = String(entry).trim().toLowerCase().replace(/^\*\./, '');
-      if (!e) return false;
-      return host === e || host.endsWith('.' + e);
-    });
+/**
+ * Prüft, ob Autosmaya auf dieser Adresse arbeiten darf.
+ * Erlaubt ist ein konfigurierter Präfix - oder, auf demselben Host und Pfad,
+ * dieselbe Seite mit anders sortierten Parametern (…/lot?foo=1&id=2).
+ */
+export function urlAllowed(settings, href) {
+  const prefixes = settings?.urlPrefixes?.length ? settings.urlPrefixes : DEFAULTS.urlPrefixes;
+  const url = safeUrl(href);
+  if (!url) return false;
 
-  if (settings.domainMode === 'allowlist') return match(settings.allowlist);
-  if (settings.domainMode === 'blocklist') return !match(settings.blocklist);
-  return true;
+  for (const raw of prefixes) {
+    const prefix = String(raw).trim();
+    if (!prefix) continue;
+    if (href.startsWith(prefix)) return true;
+
+    const ref = safeUrl(prefix);
+    if (!ref) continue;
+    if (url.origin !== ref.origin) continue;
+    if (url.pathname.replace(/\/+$/, '') !== ref.pathname.replace(/\/+$/, '')) continue;
+    // Der Präfix endet auf "?name" bzw. "&name": dieser Parameter muss vorhanden sein.
+    const param = prefix.match(/[?&]([A-Za-z0-9_-]+)$/)?.[1];
+    if (!param) return true;
+    if (url.searchParams.has(param)) return true;
+  }
+  return false;
+}
+
+function safeUrl(value) {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
 }

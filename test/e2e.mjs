@@ -9,9 +9,11 @@
  * Erkennung -> PDF-Download -> pdf.js -> Prompt -> Panel -> Cache.
  */
 import http from 'http';
+import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { chromium } from 'playwright';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -24,6 +26,9 @@ const CHROME =
 
 const SITE_PORT = 8899;
 const API_PORT = 8898;
+// Die Extension läuft laut Manifest nur auf https://de.bca-europe.com - der Test
+// leitet diesen Host im Testbrowser auf den lokalen Fixture-Server um.
+const HOST = 'de.bca-europe.com';
 
 let passed = 0;
 let failed = 0;
@@ -36,23 +41,66 @@ function check(name, actual, expected) {
 /* ------------------------------------------------------------- Server */
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.pdf': 'application/pdf' };
-const siteServer = http.createServer((req, res) => {
-  const name = path.basename(decodeURIComponent(req.url.split('?')[0])) || 'vehicle.html';
+
+/**
+ * Bildet die BCA-Adressform nach: /lot?id=<fixture> liefert die Fahrzeugseite,
+ * alle anderen Pfade die Datei mit diesem Namen (PDFs, Negativfälle).
+ */
+function serveFixture(req, res) {
+  const url = new URL(req.url, `https://${HOST}`);
+  const name =
+    url.pathname === '/lot'
+      ? url.searchParams.get('id') || 'index.html'
+      : path.basename(decodeURIComponent(url.pathname)) || 'index.html';
   const file = path.join(FIXTURES, name);
-  if (!file.startsWith(FIXTURES) || !fs.existsSync(file)) {
+  if (!file.startsWith(FIXTURES) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
     res.writeHead(404).end('not found');
     return;
   }
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
   res.end(fs.readFileSync(file));
-});
+}
+
+/**
+ * Selbstsigniertes Wegwerf-Zertifikat für den Testhost. Wird beim ersten Lauf
+ * erzeugt und ist absichtlich nicht eingecheckt.
+ */
+function testCertificate() {
+  const dir = path.join(FIXTURES, 'cert');
+  const key = path.join(dir, 'key.pem');
+  const cert = path.join(dir, 'cert.pem');
+  if (!fs.existsSync(key) || !fs.existsSync(cert)) {
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', key, '-out', cert, '-days', '3650',
+      '-subj', `/CN=${HOST}`,
+      '-addext', `subjectAltName=DNS:${HOST},DNS:localhost,IP:127.0.0.1`
+    ], { stdio: 'ignore' });
+  }
+  return { key: fs.readFileSync(key), cert: fs.readFileSync(cert) };
+}
+
+const siteServer = https.createServer(testCertificate(), serveFixture);
 
 const MOCK = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'mock-response.json'), 'utf8'));
 const MOCK_DELAY_MS = Number(process.env.MOCK_DELAY_MS || 0);
 let apiCalls = 0;
 let lastRequest = null;
 let requests = [];
+// Die Extension hat nur noch für openrouter.ai eine Host-Berechtigung; der Mock
+// liegt auf einem anderen Ursprung und muss deshalb CORS beantworten.
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS'
+};
+
 const apiServer = http.createServer((req, res) => {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, CORS).end();
+    return;
+  }
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
@@ -64,7 +112,7 @@ const apiServer = http.createServer((req, res) => {
       lastRequest = null;
     }
     const reply = () => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { 'Content-Type': 'application/json', ...CORS });
       res.end(JSON.stringify(MOCK));
     };
     MOCK_DELAY_MS ? setTimeout(reply, MOCK_DELAY_MS) : reply();
@@ -73,7 +121,8 @@ const apiServer = http.createServer((req, res) => {
 
 await new Promise((r) => siteServer.listen(SITE_PORT, '127.0.0.1', r));
 await new Promise((r) => apiServer.listen(API_PORT, '127.0.0.1', r));
-const site = (f) => `http://127.0.0.1:${SITE_PORT}/${f}`;
+const site = (f) => `https://${HOST}/lot?id=${f}`;
+const raw = (p) => `https://${HOST}/${p}`;
 
 /* ------------------------------------------------------------ Browser */
 
@@ -85,9 +134,13 @@ const ctx = await chromium.launchPersistentContext(PROFILE, {
     `--disable-extensions-except=${EXT}`,
     `--load-extension=${EXT}`,
     '--no-sandbox',
-    // BCA-Pfad testen: der echte Host zeigt im Test auf den lokalen Fixture-Server
-    `--host-resolver-rules=MAP www.bca.com 127.0.0.1:${SITE_PORT}`
+    '--ignore-certificate-errors',
+    // Der Testbrowser darf nicht über einen Umgebungs-Proxy gehen, sonst greifen
+    // die Host-Umleitungen auf den lokalen Fixture-Server nicht.
+    '--no-proxy-server',
+    `--host-resolver-rules=MAP ${HOST} 127.0.0.1:${SITE_PORT}, MAP www.example.com 127.0.0.1:${SITE_PORT}`
   ],
+  ignoreHTTPSErrors: true,
   viewport: { width: 1180, height: 900 },
   colorScheme: 'light'
 });
@@ -130,12 +183,12 @@ await settings({
   panelCollapsed: false
 });
 
-/* 2 – keine Fehlalarme auf Seiten ohne Fahrzeugbezug */
-for (const [file, expected] of [['blog.html', false], ['pricelist.html', false]]) {
+/* 2 – ohne Dokument auf der Seite kein Panel */
+{
   const p = await ctx.newPage();
-  await p.goto(site(file));
+  await p.goto(site('nodoc.html'));
   await p.waitForTimeout(3500);
-  check(`Kein Panel auf ${file}`, await p.evaluate(`Boolean(${ROOT})`), expected);
+  check('Kein Panel ohne Dokument-Link', await p.evaluate(`Boolean(${ROOT})`), false);
   await p.close();
 }
 
@@ -344,20 +397,20 @@ check('Erkannte Links sind auf der Seite markiert',
 // Toolbar-Symbol trägt das Urteil
 const probe = await ctx.newPage();
 await probe.goto(`chrome-extension://${extId}/src/options/options.html`);
-const badge = await probe.evaluate(async () => {
-  const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:8899/long.html' });
+const badge = await probe.evaluate(async (target) => {
+  const tabs = await chrome.tabs.query({ url: target });
   const id = tabs[0]?.id;
   return { text: await chrome.action.getBadgeText({ tabId: id }), title: await chrome.action.getTitle({ tabId: id }) };
-});
+}, `https://${HOST}/lot?id=long.html`);
 check('Toolbar-Symbol zeigt die Mängelzahl', badge.text, '6');
 check('Toolbar-Titel bleibt sachlich', badge.title, 'Autosmaya: 6 Mängel, 3 kritisch');
 const probe0 = probe;
 
 // Zustand für das Popup
-const popupState = await probe0.evaluate(async () => {
-  const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:8899/long.html' });
+const popupState = await probe0.evaluate(async (target) => {
+  const tabs = await chrome.tabs.query({ url: target });
   return chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_STATE' });
-});
+}, `https://${HOST}/lot?id=long.html`);
 check('Popup bekommt Urteil und Leseabdeckung',
   [popupState.status, popupState.verdict.recommendation, popupState.defects, popupState.pages],
   ['done', 'nachverhandeln', 6, 30]);
@@ -381,10 +434,32 @@ await probe0.close();
 await page.close();
 await settings({ cacheEnabled: true, panelCollapsed: false, panelTheme: 'auto' });
 
-/* 10 - BCA: Portal-Erkennung und Schäden direkt von der Seite */
+/* 10 - Adressschranke: nur /lot?id auf de.bca-europe.com */
+for (const [name, url] of [
+  ['Startseite', raw('')],
+  ['Los ohne id', raw('lot')],
+  ['anderer Pfad mit id', raw('suche?id=1')],
+  ['fremde Domain', 'https://www.example.com/lot?id=bca.html']
+]) {
+  const p = await ctx.newPage();
+  await p.goto(url).catch(() => {});
+  await p.waitForTimeout(2500);
+  check(`Kein Zugriff: ${name}`, await p.evaluate(`Boolean(${ROOT})`), false);
+  await p.close();
+}
+check('Parameterreihenfolge egal', await (async () => {
+  const p = await ctx.newPage();
+  await p.goto(`https://${HOST}/lot?ref=abc&id=bca.html`);
+  await p.waitForTimeout(3000);
+  const has = await p.evaluate(`Boolean(${ROOT})`);
+  await p.close();
+  return has;
+})(), true);
+
+/* 11 - BCA: Portal-Erkennung und Schäden direkt von der Seite */
 await settings({ cacheEnabled: true });
 page = await ctx.newPage();
-await page.goto('http://www.bca.com/bca.html');
+await page.goto(site('bca.html'));
 await page.waitForFunction(ROOT, null, { timeout: 20000 });
 
 check('Schäden von der Seite sofort sichtbar (vor der KI)',
@@ -401,19 +476,21 @@ check('BCA: Seiten-Schäden bleiben neben dem Ergebnis stehen',
 check('BCA: Mängel-Tab ist der Startpunkt', await evalRoot(page, `r.dataset.tab`), 'maengel');
 await page.close();
 
-/* 11 - Optionsseite und Barrierefreiheit */
+/* 12 - Optionsseite und Barrierefreiheit */
 const opts = await ctx.newPage();
 await opts.goto(`chrome-extension://${extId}/src/options/options.html`);
 await opts.waitForTimeout(400);
-check('Domainfelder nur im passenden Modus sichtbar',
+check('Erlaubte Adresse steht in den Optionen',
+  await opts.evaluate(() => document.getElementById('urlPrefixes').value.trim()),
+  'https://de.bca-europe.com/lot?id');
+check('Modellfeld ist frei beschreibbar mit Vorschlägen',
   await opts.evaluate(() => [
-    getComputedStyle(document.getElementById('allowField')).display,
-    getComputedStyle(document.getElementById('blockField')).display
-  ]), ['none', 'none']);
-await opts.selectOption('#domainMode', 'allowlist');
-await opts.waitForTimeout(200);
-check('Allowlist erscheint bei Umschaltung',
-  await opts.evaluate(() => getComputedStyle(document.getElementById('allowField')).display), 'block');
+    document.getElementById('model').tagName,
+    document.getElementById('model').getAttribute('list'),
+    document.querySelectorAll('#modelList option').length > 0
+  ]), ['INPUT', 'modelList', true]);
+check('Standardmodell ist Nova 2 Lite',
+  await opts.evaluate(() => document.getElementById('model').value), 'amazon/nova-2-lite-v1');
 await opts.close();
 
 const rm = await ctx.newPage();
