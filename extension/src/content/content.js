@@ -265,23 +265,6 @@
   function findDocuments() {
     const found = new Map();
 
-    // BCA Direkt-Synthese: Wenn wir auf einer BCA-Fahrzeugseite sind (/lot?id=... oder ?VehId=...),
-    // existiert verlässlich der ViewPDF.aspx Endpoint für dieses Auto.
-    if (state.portal?.id === 'bca' || /bca-europe\.com/i.test(location.hostname)) {
-      const sp = new URLSearchParams(location.search);
-      const vehId = sp.get('id') || sp.get('VehId') || sp.get('vehId') || sp.get('VehID');
-      if (vehId && /^[a-f0-9-]{10,}$/i.test(vehId)) {
-        const directPdfUrl = `https://${location.hostname}/Classic/Pages/ViewPDF.aspx?VehId=${vehId}&Index=5&SubIndex=6&LotId=0&SourceSystem=BuyerGateway`;
-        found.set(directPdfUrl, {
-          url: directPdfUrl,
-          label: 'Fahrzeug PDF',
-          kind: 'condition',
-          score: 250,
-          el: null
-        });
-      }
-    }
-
     for (const el of candidateElements()) {
       const url = resolveUrl(el);
       if (!url) continue;
@@ -490,7 +473,7 @@
 
   async function fetchPdfInPage(url, _depth = 0, _waitCount = 0) {
     if (_depth > 4) return null;
-    if (_waitCount > 12) return null;
+    if (_waitCount > 25) return null;
     // Bereinige eventuelle Thumbnail-Parameter wie width=96
     const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
     try {
@@ -512,11 +495,11 @@
         logDebug('HTML_PEEK', `HTML von ${cleanUrl.split('?')[0]} (${buf.byteLength} B): ${snippet}`);
 
         // Falls BCA das PDF noch generiert ("in Vorbereitung / Bitte warten"):
-        if (WAITING_RE.test(html) && _waitCount < 12) {
-          logDebug('WAIT', `PDF ist in Vorbereitung (Versuch ${_waitCount + 1}/12). Warte 2.5s...`);
+        if (WAITING_RE.test(html) && _waitCount < 25) {
+          logDebug('WAIT', `PDF wird noch generiert (Warteversuch ${_waitCount + 1}/25). Warte 3s...`);
           const refreshMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/i);
           const nextUrl = refreshMatch?.[1] ? new URL(refreshMatch[1], cleanUrl).href : cleanUrl;
-          await sleep(2500);
+          await sleep(3000);
           return fetchPdfInPage(nextUrl, _depth, _waitCount + 1);
         }
 

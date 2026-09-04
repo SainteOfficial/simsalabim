@@ -182,7 +182,7 @@ const WAITING_RE = /in Vorbereitung|Bitte warten|wird vorbereitet|wird generiert
 /** Fallback-Download im Hintergrund (kein CORS, dafür evtl. ohne Session-Cookies). */
 async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
   if (_depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
-  if (_waitCount > 12) throw new Error('Das PDF wird von BCA noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
+  if (_waitCount > 25) throw new Error('Das PDF wird von BCA noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
 
   let res;
   // Entferne eventuelle Thumbnail-Parameter wie width=96
@@ -216,10 +216,10 @@ async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
       const html = new TextDecoder().decode(buf);
 
       // Falls BCA das PDF noch generiert ("in Vorbereitung / Bitte warten"):
-      if (WAITING_RE.test(html) && _waitCount < 12) {
+      if (WAITING_RE.test(html) && _waitCount < 25) {
         const refreshMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/i);
         const nextUrl = refreshMatch?.[1] ? new URL(refreshMatch[1], cleanUrl).href : cleanUrl;
-        await sleep(2500);
+        await sleep(3000);
         return fetchPdfInBackground(nextUrl, signal, _depth, _waitCount + 1);
       }
 
