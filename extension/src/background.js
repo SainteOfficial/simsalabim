@@ -212,7 +212,12 @@ async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
       credentials: 'include',
       signal,
       redirect: 'follow',
-      headers: { 'Accept': 'application/pdf, application/octet-stream, text/html, */*' }
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/pdf, application/octet-stream, text/html, */*',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      }
     });
   } catch (err) {
     if (signal?.aborted) throw new Error('PDF-Download wurde abgebrochen.');

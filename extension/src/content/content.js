@@ -485,23 +485,52 @@
     return null;
   }
 
-  async function fetchPdfInPage(url, _depth = 0, _waitCount = 0) {
-    if (_depth > 4) return null;
-    if (_waitCount > 35) return null;
+  async function fetchPdfInPage(url, _depth = 0, _waitCount = 0, _triggerFrame = null) {
+    if (_depth > 4 || _waitCount > 35) {
+      if (_triggerFrame) { try { _triggerFrame.remove(); } catch {} }
+      return null;
+    }
     // Bereinige eventuelle Thumbnail-Parameter wie width=96
     const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
+
+    // Wenn es sich um ein BCA ViewPDF handelt, starte beim ersten Versuch einen unsichtbaren iFrame,
+    // der im Browser-Kontext die echte Dokumenten-Generierung anstößt.
+    let triggerFrame = _triggerFrame;
+    if (!triggerFrame && /ViewPDF\.aspx/i.test(cleanUrl) && typeof document !== 'undefined' && document.body) {
+      try {
+        triggerFrame = document.createElement('iframe');
+        triggerFrame.style.cssText = 'position:fixed;width:1px;height:1px;top:-9999px;left:-9999px;opacity:0;pointer-events:none;';
+        triggerFrame.src = cleanUrl;
+        document.body.appendChild(triggerFrame);
+        logDebug('IFRAME_TRIGGER', `BCA-Generierung via Hintergrund-iFrame gestartet`);
+      } catch (e) {
+        logDebug('IFRAME_ERR', `iFrame-Start fehlgeschlagen: ${e?.message}`);
+      }
+    }
+
     try {
       const res = await fetch(cleanUrl, {
         credentials: 'include',
         redirect: 'follow',
-        headers: { 'Accept': 'application/pdf, application/octet-stream, text/html, */*' }
+        cache: 'no-store',
+        headers: {
+          'Accept': 'application/pdf, application/octet-stream, text/html, */*',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
+        }
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        if (triggerFrame && _waitCount === 0) { try { triggerFrame.remove(); } catch {} }
+        return null;
+      }
       const type = (res.headers.get('content-type') || '').toLowerCase();
       const buf = await res.arrayBuffer();
       const head = String.fromCharCode.apply(null, new Uint8Array(buf.slice(0, 512)));
 
-      if (head.includes('%PDF-')) return { base64: toBase64(buf), bytes: buf.byteLength };
+      if (head.includes('%PDF-')) {
+        if (triggerFrame) { try { triggerFrame.remove(); } catch {} }
+        return { base64: toBase64(buf), bytes: buf.byteLength };
+      }
 
       if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
         const html = new TextDecoder().decode(buf);
@@ -515,18 +544,20 @@
           const targetInfo = nextUrl !== cleanUrl ? nextUrl.split('?')[0] : 'selbe URL';
           logDebug('WAIT', `PDF wird noch generiert (Warteversuch ${_waitCount + 1}/35, Ziel: ${targetInfo}). Warte 3s...`);
           await sleep(3000);
-          return fetchPdfInPage(nextUrl, _depth, _waitCount + 1);
+          return fetchPdfInPage(nextUrl, _depth, _waitCount + 1, triggerFrame);
         }
 
         if (nested && nested !== cleanUrl && nested !== url && nested !== res.url) {
           logDebug('NESTED', `Gefundener PDF-Viewer-Link im HTML: ${nested}`);
-          return fetchPdfInPage(nested, _depth + 1, _waitCount);
+          return fetchPdfInPage(nested, _depth + 1, _waitCount, triggerFrame);
         }
 
         logDebug('HTML_PEEK', `HTML von ${cleanUrl.split('?')[0]} (${buf.byteLength} B): ${snippet}`);
       }
+      if (triggerFrame) { try { triggerFrame.remove(); } catch {} }
       return null;
     } catch (err) {
+      if (triggerFrame) { try { triggerFrame.remove(); } catch {} }
       logDebug('DOWNLOAD_ERR', `Fehler beim Tab-Download: ${err?.message || err}`);
       return null; // z.B. CORS -> Hintergrund versucht es erneut
     }
