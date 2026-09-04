@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fahrzeug-Mängel-Scanner – Einstellungen</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="hero">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 13l1.5-4.5A2 2 0 0 1 8.4 7h7.2a2 2 0 0 1 1.9 1.5L19 13" />
+            <path d="M3 13h18v4a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+            <circle cx="7.5" cy="15.5" r=".8" fill="currentColor" />
+            <circle cx="16.5" cy="15.5" r=".8" fill="currentColor" />
+          </svg>
+        </div>
+        <div>
+          <h1>Fahrzeug-Mängel-Scanner</h1>
+          <p>Liest Fahrzeug-PDF und Zustandsbericht automatisch aus und listet alle Mängel.</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>OpenRouter</h2>
+        <label class="field">
+          <span class="label">API-Key</span>
+          <div class="key-row">
+            <input id="apiKey" type="password" placeholder="sk-or-v1-..." autocomplete="off" spellcheck="false" />
+            <button id="toggleKey" class="ghost" type="button">Zeigen</button>
+            <button id="testKey" class="ghost" type="button">Testen</button>
+          </div>
+          <small
+            >Key erstellen auf
+            <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>. Der Key
+            bleibt lokal im Browser.</small
+          >
+          <div id="keyStatus" class="status" hidden></div>
+        </label>
+
+        <label class="field">
+          <span class="label">API-Endpunkt (nur ändern, wenn du einen eigenen Proxy nutzt)</span>
+          <input id="apiBase" type="text" spellcheck="false" placeholder="https://openrouter.ai/api/v1" />
+        </label>
+
+        <label class="field">
+          <span class="label">Modell für Text-PDFs</span>
+          <select id="model"></select>
+          <small id="modelPrice"></small>
+        </label>
+
+        <label class="field">
+          <span class="label">Modell für gescannte PDFs (Bilderkennung)</span>
+          <select id="visionModel"></select>
+          <small>Wird nur genutzt, wenn im PDF kein Text steckt. Bilder kosten deutlich mehr Tokens.</small>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Verhalten</h2>
+        <label class="switch-row">
+          <input id="autoRun" type="checkbox" />
+          <span><strong>Automatisch starten</strong><small>Analyse startet, sobald eine Fahrzeugseite erkannt wird.</small></span>
+        </label>
+        <label class="switch-row">
+          <input id="visionFallback" type="checkbox" />
+          <span><strong>Gescannte PDFs per Bilderkennung lesen</strong><small>Fallback, wenn kein Text extrahierbar ist.</small></span>
+        </label>
+        <label class="switch-row">
+          <input id="cacheEnabled" type="checkbox" />
+          <span><strong>Ergebnisse zwischenspeichern</strong><small>Gleiches PDF wird nie zweimal bezahlt.</small></span>
+        </label>
+
+        <div class="grid2">
+          <label class="field">
+            <span class="label">Max. Seiten bei Bilderkennung</span>
+            <input id="visionMaxPages" type="number" min="1" max="20" />
+          </label>
+          <label class="field">
+            <span class="label">Max. Zeichen an die KI</span>
+            <input id="maxChars" type="number" min="5000" max="400000" step="5000" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span class="label">Sprache der Ausgabe</span>
+          <select id="outputLanguage">
+            <option value="de">Deutsch</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Wo soll die Extension laufen?</h2>
+        <label class="field">
+          <span class="label">Modus</span>
+          <select id="domainMode">
+            <option value="all">Auf allen Seiten</option>
+            <option value="allowlist">Nur auf diesen Domains</option>
+            <option value="blocklist">Überall außer auf diesen Domains</option>
+          </select>
+        </label>
+        <label class="field" id="allowField" hidden>
+          <span class="label">Erlaubte Domains (eine pro Zeile)</span>
+          <textarea id="allowlist" rows="4" placeholder="auktion.example.com"></textarea>
+        </label>
+        <label class="field" id="blockField" hidden>
+          <span class="label">Gesperrte Domains (eine pro Zeile)</span>
+          <textarea id="blocklist" rows="4" placeholder="mail.google.com"></textarea>
+        </label>
+        <label class="field">
+          <span class="label">Zusätzliche Link-Stichwörter (eine pro Zeile)</span>
+          <textarea id="keywords" rows="5"></textarea>
+          <small>Nur nötig für ungewöhnliche Bezeichnungen. Zustandsbericht, Fahrzeug PDF, Appraisal,
+            Gutachten, Prüfbericht, Datenblatt &amp; Co. erkennt die Extension bereits von selbst.</small>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Cache</h2>
+        <p id="cacheStats" class="muted">wird geladen…</p>
+        <button id="clearCache" class="ghost" type="button">Cache leeren</button>
+      </section>
+    </main>
+
+    <footer class="bar">
+      <span id="saveStatus" class="muted"></span>
+      <button id="save" class="primary" type="button">Speichern</button>
+    </footer>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
