@@ -173,18 +173,17 @@ function findPdfInHtml(html, baseUrl) {
     }
   }
 
-  // 4. BCA-Spezialfall: Wenn die Seite ViewPDF.aspx heißt und keine URL gefunden wurde, versuche ShowPDF.aspx
-  if (/ViewPDF\.aspx/i.test(baseUrl)) {
-    const fallback = baseUrl.replace(/ViewPDF\.aspx/i, 'ShowPDF.aspx');
-    if (fallback !== baseUrl) return fallback;
-  }
-
   return null;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const WAITING_RE = /in Vorbereitung|Bitte warten|wird vorbereitet|wird generiert|being prepared|please wait|is generating/i;
+
 /** Fallback-Download im Hintergrund (kein CORS, dafür evtl. ohne Session-Cookies). */
-async function fetchPdfInBackground(url, signal, _depth = 0) {
+async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
   if (_depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
+  if (_waitCount > 12) throw new Error('Das PDF wird von BCA noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
+
   let res;
   // Entferne eventuelle Thumbnail-Parameter wie width=96
   const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
@@ -210,14 +209,23 @@ async function fetchPdfInBackground(url, signal, _depth = 0) {
   if (looksLikePdf(buf)) {
     return { base64: bytesToBase64(buf), bytes: buf.byteLength, finalUrl: res.url };
   }
-  // Kein PDF? Prüfe ob die Antwort HTML ist und ein eingebettetes PDF enthält.
+  // Kein PDF? Prüfe ob die Antwort HTML ist und ein eingebettetes PDF enthält oder noch generiert wird
   const type = (res.headers.get('content-type') || '').toLowerCase();
   if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
     try {
       const html = new TextDecoder().decode(buf);
+
+      // Falls BCA das PDF noch generiert ("in Vorbereitung / Bitte warten"):
+      if (WAITING_RE.test(html) && _waitCount < 12) {
+        const refreshMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/i);
+        const nextUrl = refreshMatch?.[1] ? new URL(refreshMatch[1], cleanUrl).href : cleanUrl;
+        await sleep(2500);
+        return fetchPdfInBackground(nextUrl, signal, _depth, _waitCount + 1);
+      }
+
       const nested = findPdfInHtml(html, res.url || cleanUrl);
       if (nested && nested !== url && nested !== res.url && nested !== cleanUrl) {
-        return fetchPdfInBackground(nested, signal, _depth + 1);
+        return fetchPdfInBackground(nested, signal, _depth + 1, _waitCount);
       }
     } catch { /* decode-Fehler ignorieren */ }
   }

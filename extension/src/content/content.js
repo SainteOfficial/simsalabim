@@ -8,7 +8,7 @@
   window.__vmsInjected = true;
 
   const MAX_DOCS = 3;
-  const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/;
+  const VIN_RE = /\b[A-Z0-9]{17}\b/;
 
   /**
    * Portal-Profile. BCA nennt den Zustandsbericht "Appraisal" bzw. "Fahrzeug PDF"
@@ -20,7 +20,7 @@
       hosts: ['bca.com', 'bca.de', 'bca.co.uk', 'bca-europe.com', 'bcaeurope.com', 'bca-autoauktionen.de'],
       words: [
         'appraisal', 'fahrzeug pdf', 'vehicle pdf', 'zustandsbericht', 'schadenaufstellung',
-        'schadensaufstellung', 'damage list', 'vehicle report', 'fahrzeugbericht'
+        'schadensaufstellung', 'damage list', 'vehicle report', 'fahrzeugbericht', 'inspection'
       ],
       damageHeadings: ['schäden', 'schaden', 'damages', 'damage', 'mängel', 'appraisal', 'zustand']
     }
@@ -29,10 +29,11 @@
   const CONDITION_WORDS = [
     'zustandsbericht', 'zustandsberichte', 'appraisal', 'gutachten', 'prüfbericht',
     'pruefbericht', 'schadenbericht', 'schadensbericht', 'condition report',
-    'inspection report', 'damage report', 'schadensgutachten'
+    'inspection report', 'damage report', 'schadensgutachten', 'fahrzeug pdf',
+    'fahrzeug-pdf', 'fahrzeugpdf', 'inspection', 'befund'
   ];
   const DATASHEET_WORDS = [
-    'fahrzeug pdf', 'fahrzeugpdf', 'vehicle pdf', 'datenblatt', 'exposé', 'expose',
+    'vehicle pdf', 'datenblatt', 'exposé', 'expose',
     'fahrzeugdaten', 'car pdf', 'fahrzeugschein'
   ];
 
@@ -177,13 +178,24 @@
   }
 
   function resolveUrl(el) {
-    const raw =
+    let raw =
       el.getAttribute('href') ||
       el.dataset?.href ||
       el.dataset?.url ||
       el.getAttribute('data-download-url') ||
       '';
-    if (!raw || raw.startsWith('#') || raw.startsWith('javascript:')) return null;
+
+    // Falls href javascript:window.open(...) oder onclick="..." enthält:
+    if (!raw || raw.startsWith('#') || raw.startsWith('javascript:')) {
+      const onclick = el.getAttribute('onclick') || '';
+      const winOpenMatch = (raw + ' ' + onclick).match(/window\.open\s*\(\s*['"]([^'"]+)['"]/i);
+      if (winOpenMatch) {
+        raw = winOpenMatch[1];
+      } else {
+        return null;
+      }
+    }
+
     try {
       const url = new URL(raw, location.href);
       if (!/^https?:$/.test(url.protocol)) return null;
@@ -244,6 +256,24 @@
 
   function findDocuments() {
     const found = new Map();
+
+    // BCA Direkt-Synthese: Wenn wir auf einer BCA-Fahrzeugseite sind (/lot?id=... oder ?VehId=...),
+    // existiert verlässlich der ViewPDF.aspx Endpoint für dieses Auto.
+    if (state.portal?.id === 'bca' || /bca-europe\.com/i.test(location.hostname)) {
+      const sp = new URLSearchParams(location.search);
+      const vehId = sp.get('id') || sp.get('VehId') || sp.get('vehId') || sp.get('VehID');
+      if (vehId && /^[a-f0-9-]{10,}$/i.test(vehId)) {
+        const directPdfUrl = `https://${location.hostname}/Classic/Pages/ViewPDF.aspx?VehId=${vehId}&Index=5&SubIndex=6&LotId=0&SourceSystem=BuyerGateway`;
+        found.set(directPdfUrl, {
+          url: directPdfUrl,
+          label: 'Fahrzeug PDF',
+          kind: 'condition',
+          score: 250,
+          el: null
+        });
+      }
+    }
+
     for (const el of candidateElements()) {
       const url = resolveUrl(el);
       if (!url) continue;
@@ -414,7 +444,7 @@
     if (!ctx.vin) {
       const bodyText = norm(document.body?.innerText || '').slice(0, 20000);
       const labelled = bodyText.match(
-        /(?:Fahrgestellnummer|FIN|VIN|Chassis)[^A-HJ-NPR-Z0-9]{0,10}([A-HJ-NPR-Z0-9]{17})/i
+        /(?:Fahrgestellnummer|FIN|VIN|Chassis)[^A-Z0-9]{0,10}([A-Z0-9]{17})/i
       );
       if (labelled) ctx.vin = labelled[1];
       else {
@@ -447,8 +477,12 @@
 
   /* ------------------------------------------------------------- Download */
 
-  async function fetchPdfInPage(url, _depth = 0) {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const WAITING_RE = /in Vorbereitung|Bitte warten|wird vorbereitet|wird generiert|being prepared|please wait|is generating/i;
+
+  async function fetchPdfInPage(url, _depth = 0, _waitCount = 0) {
     if (_depth > 4) return null;
+    if (_waitCount > 12) return null;
     // Bereinige eventuelle Thumbnail-Parameter wie width=96
     const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
     try {
@@ -468,10 +502,20 @@
         const html = new TextDecoder().decode(buf);
         const snippet = html.replace(/\s+/g, ' ').slice(0, 200);
         logDebug('HTML_PEEK', `HTML von ${cleanUrl.split('?')[0]} (${buf.byteLength} B): ${snippet}`);
+
+        // Falls BCA das PDF noch generiert ("in Vorbereitung / Bitte warten"):
+        if (WAITING_RE.test(html) && _waitCount < 12) {
+          logDebug('WAIT', `PDF ist in Vorbereitung (Versuch ${_waitCount + 1}/12). Warte 2.5s...`);
+          const refreshMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/i);
+          const nextUrl = refreshMatch?.[1] ? new URL(refreshMatch[1], cleanUrl).href : cleanUrl;
+          await sleep(2500);
+          return fetchPdfInPage(nextUrl, _depth, _waitCount + 1);
+        }
+
         const nested = findPdfInHtml(html, res.url || cleanUrl);
-        if (nested && nested !== cleanUrl && nested !== url) {
+        if (nested && nested !== cleanUrl && nested !== url && nested !== res.url) {
           logDebug('NESTED', `Gefundener PDF-Viewer-Link im HTML: ${nested}`);
-          return fetchPdfInPage(nested, _depth + 1);
+          return fetchPdfInPage(nested, _depth + 1, _waitCount);
         }
       }
       return null;
@@ -547,12 +591,6 @@
           if (resolved !== baseUrl) return resolved;
         } catch { /* ignore */ }
       }
-    }
-
-    // 4. BCA-Spezialfall: Wenn die Seite ViewPDF.aspx heißt und keine URL gefunden wurde, versuche ShowPDF.aspx
-    if (/ViewPDF\.aspx/i.test(baseUrl)) {
-      const fallback = baseUrl.replace(/ViewPDF\.aspx/i, 'ShowPDF.aspx');
-      if (fallback !== baseUrl) return fallback;
     }
 
     return null;
@@ -1827,15 +1865,23 @@
    * Spiegelt urlAllowed() aus lib/config.js - Content-Scripts können nicht importieren.
    */
   function urlAllowed(settings, href) {
-    const prefixes = settings?.urlPrefixes?.length
-      ? settings.urlPrefixes
-      : ['https://de.bca-europe.com/lot?id'];
     let url;
     try {
       url = new URL(href);
     } catch {
       return false;
     }
+
+    // Für BCA-Portale: Erlaube Lot- und Fahrzeug-Seiten direkt
+    if (/(?:bca-europe\.com|bca\.com|bca\.de|bca\.co\.uk)/i.test(url.hostname)) {
+      if (url.pathname.includes('/lot') || url.pathname.includes('/vehicle') || url.searchParams.has('id') || url.searchParams.has('VehId')) {
+        return true;
+      }
+    }
+
+    const prefixes = settings?.urlPrefixes?.length
+      ? settings.urlPrefixes
+      : ['https://de.bca-europe.com/lot?id'];
 
     for (const raw of prefixes) {
       const prefix = String(raw).trim();

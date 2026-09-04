@@ -97,9 +97,17 @@ export async function setSettings(patch) {
  * dieselbe Seite mit anders sortierten Parametern (…/lot?foo=1&id=2).
  */
 export function urlAllowed(settings, href) {
-  const prefixes = settings?.urlPrefixes?.length ? settings.urlPrefixes : DEFAULTS.urlPrefixes;
   const url = safeUrl(href);
   if (!url) return false;
+
+  // Für BCA-Portale: Erlaube Lot- und Fahrzeug-Seiten direkt
+  if (/(?:bca-europe\.com|bca\.com|bca\.de|bca\.co\.uk)/i.test(url.hostname)) {
+    if (url.pathname.includes('/lot') || url.pathname.includes('/vehicle') || url.searchParams.has('id') || url.searchParams.has('VehId')) {
+      return true;
+    }
+  }
+
+  const prefixes = settings?.urlPrefixes?.length ? settings.urlPrefixes : DEFAULTS.urlPrefixes;
 
   for (const raw of prefixes) {
     const prefix = String(raw).trim();
