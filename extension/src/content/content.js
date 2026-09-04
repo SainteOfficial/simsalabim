@@ -194,26 +194,35 @@
   }
 
   function classify(el, url) {
+    // Wenn die URL direkt ViewPDF.aspx heißt, ist das die primäre BCA-Viewer-Seite -> Höchste Priorität!
+    if (/ViewPDF\.aspx/i.test(url)) {
+      return { kind: 'condition', score: 150, word: 'ViewPDF' };
+    }
+
+    // Wenn die URL explizit ein Thumbnail-Bild ist (z.B. width=96), abwerten
+    const isThumbnail = /([?&])(?:width|height)=[1-9]\d{0,2}\b/i.test(url) || /\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)/i.test(url);
+    const scoreMod = isThumbnail ? -40 : 0;
+
     const haystack = lower(
       [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), el.className, url].join(' ')
     ).slice(0, 400);
 
-    for (const w of CONDITION_WORDS) if (haystack.includes(w)) return { kind: 'condition', score: 100, word: w };
-    for (const w of DATASHEET_WORDS) if (haystack.includes(w)) return { kind: 'datasheet', score: 70, word: w };
+    for (const w of CONDITION_WORDS) if (haystack.includes(w)) return { kind: 'condition', score: 100 + scoreMod, word: w };
+    for (const w of DATASHEET_WORDS) if (haystack.includes(w)) return { kind: 'datasheet', score: 70 + scoreMod, word: w };
 
     for (const w of state.portal?.words || []) {
-      if (haystack.includes(w)) return { kind: 'condition', score: 90, word: w };
+      if (haystack.includes(w)) return { kind: 'condition', score: 90 + scoreMod, word: w };
     }
 
     const extra = (state.settings?.keywords || []).filter(
       (k) => k && ![...CONDITION_WORDS, ...DATASHEET_WORDS].includes(k)
     );
-    for (const w of extra) if (w && haystack.includes(lower(w))) return { kind: 'custom', score: 60, word: w };
+    for (const w of extra) if (w && haystack.includes(lower(w))) return { kind: 'custom', score: 60 + scoreMod, word: w };
 
     const path = url.split('?')[0].toLowerCase();
-    if (path.endsWith('.pdf')) return { kind: 'pdf', score: 40, word: '.pdf' };
+    if (path.endsWith('.pdf')) return { kind: 'pdf', score: 40 + scoreMod, word: '.pdf' };
     if (/[?&/](pdf|document|report)[=/]/.test(url.toLowerCase()) && /pdf/i.test(haystack)) {
-      return { kind: 'pdf', score: 30, word: 'pdf' };
+      return { kind: 'pdf', score: 30 + scoreMod, word: 'pdf' };
     }
     return null;
   }
@@ -425,8 +434,10 @@
 
   async function fetchPdfInPage(url, _depth = 0) {
     if (_depth > 4) return null;
+    // Bereinige eventuelle Thumbnail-Parameter wie width=96
+    const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
     try {
-      const res = await fetch(url, {
+      const res = await fetch(cleanUrl, {
         credentials: 'include',
         redirect: 'follow',
         headers: { 'Accept': 'application/pdf, application/octet-stream, */*' }
@@ -438,10 +449,13 @@
 
       if (head.includes('%PDF-')) return { base64: toBase64(buf), bytes: buf.byteLength };
 
-      if (type.includes('html') || type.includes('text')) {
+      if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
         const html = new TextDecoder().decode(buf);
-        const nested = findPdfInHtml(html, url);
-        if (nested && nested !== url) return fetchPdfInPage(nested, _depth + 1);
+        const nested = findPdfInHtml(html, res.url || cleanUrl);
+        if (nested && nested !== cleanUrl && nested !== url) {
+          logDebug('NESTED', `Gefundener PDF-Viewer-Link im HTML: ${nested}`);
+          return fetchPdfInPage(nested, _depth + 1);
+        }
       }
       return null;
     } catch {
@@ -450,25 +464,61 @@
   }
 
   function findPdfInHtml(html, baseUrl) {
-    const patterns = [
-      /<iframe[^>]+src=["']([^"']+\.pdf[^"']*)["']/i,
-      /<embed[^>]+src=["']([^"']+\.pdf[^"']*)["']/i,
-      /<object[^>]+data=["']([^"']+\.pdf[^"']*)["']/i,
-      /<a[^>]+href=["']([^"']+\.pdf[^"']*)["']/i,
-      /["'](https?:\/\/[^"'\s]+?\.pdf(?:[?#][^"'\s]*)?)["']/i,
-      /<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/i,
-      /["'](https?:\/\/[^"'\s]*?(?:download|document|attachment|file|blob)[^"'\s]*?)["']/i
+    if (!html) return null;
+
+    // 1. Suche nach iframe, embed, object oder frame (ohne .pdf Zwang – auf Viewer-Seiten ist jeder iframe das Dokument)
+    const frameMatches = [
+      ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
+      ...html.matchAll(/<embed[^>]+src=["']([^"']+)["']/gi),
+      ...html.matchAll(/<object[^>]+data=["']([^"']+)["']/gi),
+      ...html.matchAll(/<frame[^>]+src=["']([^"']+)["']/gi)
     ];
-    for (const re of patterns) {
-      const m = html.match(re);
-      if (m?.[1]) {
-        try {
-          return new URL(m[1], baseUrl).href;
-        } catch {
-          /* ignore */
-        }
-      }
+    for (const m of frameMatches) {
+      const src = m[1]?.trim();
+      if (!src || src.startsWith('javascript:') || src.startsWith('about:') || /analytics|doubleclick|google/i.test(src)) continue;
+      try {
+        const resolved = new URL(src, baseUrl).href;
+        if (resolved !== baseUrl) return resolved;
+      } catch { /* ignore */ }
     }
+
+    // 2. Suche nach Links zu Dokumenten, PDFs oder Download-Endpoints
+    const linkMatches = [
+      ...html.matchAll(/<a[^>]+href=["']([^"']*(?:\.pdf|getdoc|getpdf|viewpdf|showpdf|document|attachment|download|stream)[^"']*)["']/gi),
+      ...html.matchAll(/["'](https?:\/\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|Download)[^"'\s<>]*)["']/gi),
+      ...html.matchAll(/["'](\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF)[^"'\s<>]*)["']/gi),
+      ...html.matchAll(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/gi)
+    ];
+    for (const m of linkMatches) {
+      const target = m[1]?.trim();
+      if (!target) continue;
+      try {
+        const resolved = new URL(target, baseUrl).href;
+        if (resolved !== baseUrl) return resolved;
+      } catch { /* ignore */ }
+    }
+
+    // 3. JavaScript Weiterleitungen / Variablen
+    const jsMatches = [
+      ...html.matchAll(/(?:window\.location(?:\.href)?|location\.replace|location\.href)\s*=\s*["']([^"']+)["']/gi),
+      ...html.matchAll(/(?:url|pdfUrl|documentUrl|fileUrl|docUrl|source|src)\s*[:=]\s*["']([^"']+)["']/gi),
+      ...html.matchAll(/window\.open\s*\(\s*["']([^"']+)["']/gi)
+    ];
+    for (const m of jsMatches) {
+      const target = m[1]?.trim();
+      if (!target || target.startsWith('javascript:') || target.length < 4) continue;
+      try {
+        const resolved = new URL(target, baseUrl).href;
+        if (resolved !== baseUrl) return resolved;
+      } catch { /* ignore */ }
+    }
+
+    // 4. BCA-Spezialfall: Wenn die Seite ViewPDF.aspx heißt und keine URL gefunden wurde, versuche ShowPDF.aspx
+    if (/ViewPDF\.aspx/i.test(baseUrl)) {
+      const fallback = baseUrl.replace(/ViewPDF\.aspx/i, 'ShowPDF.aspx');
+      if (fallback !== baseUrl) return fallback;
+    }
+
     return null;
   }
 

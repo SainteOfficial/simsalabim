@@ -106,21 +106,61 @@ function looksLikePdf(buffer) {
 
 /** Findet PDF-URLs in einer HTML-Antwort (Viewer-Seite, Redirect o.Ä.). */
 function findPdfInHtml(html, baseUrl) {
-  const patterns = [
-    /<iframe[^>]+src=["']([^"']+\.pdf[^"']*)["']/i,
-    /<embed[^>]+src=["']([^"']+\.pdf[^"']*)["']/i,
-    /<object[^>]+data=["']([^"']+\.pdf[^"']*)["']/i,
-    /<a[^>]+href=["']([^"']+\.pdf[^"']*)["']/i,
-    /["'](https?:\/\/[^"'\s]+?\.pdf(?:[?#][^"'\s]*)?)["']/i,
-    /<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/i,
-    /["'](https?:\/\/[^"'\s]*?(?:download|document|attachment|file|blob)[^"'\s]*?)["']/i
+  if (!html) return null;
+
+  // 1. Suche nach iframe, embed, object oder frame (ohne .pdf Zwang – auf Viewer-Seiten ist jeder iframe das Dokument)
+  const frameMatches = [
+    ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
+    ...html.matchAll(/<embed[^>]+src=["']([^"']+)["']/gi),
+    ...html.matchAll(/<object[^>]+data=["']([^"']+)["']/gi),
+    ...html.matchAll(/<frame[^>]+src=["']([^"']+)["']/gi)
   ];
-  for (const re of patterns) {
-    const m = html.match(re);
-    if (m?.[1]) {
-      try { return new URL(m[1], baseUrl).href; } catch { /* ignore */ }
-    }
+  for (const m of frameMatches) {
+    const src = m[1]?.trim();
+    if (!src || src.startsWith('javascript:') || src.startsWith('about:') || /analytics|doubleclick|google/i.test(src)) continue;
+    try {
+      const resolved = new URL(src, baseUrl).href;
+      if (resolved !== baseUrl) return resolved;
+    } catch { /* ignore */ }
   }
+
+  // 2. Suche nach Links zu Dokumenten, PDFs oder Download-Endpoints
+  const linkMatches = [
+    ...html.matchAll(/<a[^>]+href=["']([^"']*(?:\.pdf|getdoc|getpdf|viewpdf|showpdf|document|attachment|download|stream)[^"']*)["']/gi),
+    ...html.matchAll(/["'](https?:\/\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|Download)[^"'\s<>]*)["']/gi),
+    ...html.matchAll(/["'](\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF)[^"'\s<>]*)["']/gi),
+    ...html.matchAll(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/gi)
+  ];
+  for (const m of linkMatches) {
+    const target = m[1]?.trim();
+    if (!target) continue;
+    try {
+      const resolved = new URL(target, baseUrl).href;
+      if (resolved !== baseUrl) return resolved;
+    } catch { /* ignore */ }
+  }
+
+  // 3. JavaScript Weiterleitungen / Variablen
+  const jsMatches = [
+    ...html.matchAll(/(?:window\.location(?:\.href)?|location\.replace|location\.href)\s*=\s*["']([^"']+)["']/gi),
+    ...html.matchAll(/(?:url|pdfUrl|documentUrl|fileUrl|docUrl|source|src)\s*[:=]\s*["']([^"']+)["']/gi),
+    ...html.matchAll(/window\.open\s*\(\s*["']([^"']+)["']/gi)
+  ];
+  for (const m of jsMatches) {
+    const target = m[1]?.trim();
+    if (!target || target.startsWith('javascript:') || target.length < 4) continue;
+    try {
+      const resolved = new URL(target, baseUrl).href;
+      if (resolved !== baseUrl) return resolved;
+    } catch { /* ignore */ }
+  }
+
+  // 4. BCA-Spezialfall: Wenn die Seite ViewPDF.aspx heißt und keine URL gefunden wurde, versuche ShowPDF.aspx
+  if (/ViewPDF\.aspx/i.test(baseUrl)) {
+    const fallback = baseUrl.replace(/ViewPDF\.aspx/i, 'ShowPDF.aspx');
+    if (fallback !== baseUrl) return fallback;
+  }
+
   return null;
 }
 
@@ -128,8 +168,10 @@ function findPdfInHtml(html, baseUrl) {
 async function fetchPdfInBackground(url, signal, _depth = 0) {
   if (_depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
   let res;
+  // Entferne eventuelle Thumbnail-Parameter wie width=96
+  const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
   try {
-    res = await fetch(url, {
+    res = await fetch(cleanUrl, {
       credentials: 'include',
       signal,
       redirect: 'follow',
@@ -137,9 +179,9 @@ async function fetchPdfInBackground(url, signal, _depth = 0) {
     });
   } catch (err) {
     if (signal?.aborted) throw new Error('PDF-Download wurde abgebrochen.');
-    throw new Error(`PDF-Download im Hintergrund nicht möglich (${err.message}). URL: ${url}`);
+    throw new Error(`PDF-Download im Hintergrund nicht möglich (${err.message}). URL: ${cleanUrl}`);
   }
-  if (!res.ok) throw new Error(`PDF-Download fehlgeschlagen (HTTP ${res.status} ${res.statusText}). URL: ${url}`);
+  if (!res.ok) throw new Error(`PDF-Download fehlgeschlagen (HTTP ${res.status} ${res.statusText}). URL: ${cleanUrl}`);
   let buf;
   try {
     buf = await res.arrayBuffer();
@@ -152,11 +194,11 @@ async function fetchPdfInBackground(url, signal, _depth = 0) {
   }
   // Kein PDF? Prüfe ob die Antwort HTML ist und ein eingebettetes PDF enthält.
   const type = (res.headers.get('content-type') || '').toLowerCase();
-  if (type.includes('html') || type.includes('text') || buf.byteLength < 500000) {
+  if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
     try {
       const html = new TextDecoder().decode(buf);
-      const nested = findPdfInHtml(html, res.url);
-      if (nested && nested !== url && nested !== res.url) {
+      const nested = findPdfInHtml(html, res.url || cleanUrl);
+      if (nested && nested !== url && nested !== res.url && nested !== cleanUrl) {
         return fetchPdfInBackground(nested, signal, _depth + 1);
       }
     } catch { /* decode-Fehler ignorieren */ }
@@ -416,6 +458,7 @@ async function analyze({ tabId, pageContext, docs, force }) {
   try {
     /* ---- 1. PDFs holen und vollständig auslesen ---- */
     const parsed = [];
+    let lastDocError = null;
     for (const doc of docs) {
       if (controller.signal.aborted) throw new Error('Abgebrochen.');
       progress(tabId, 'download', { label: doc.label });
@@ -423,9 +466,14 @@ async function analyze({ tabId, pageContext, docs, force }) {
       let base64 = doc.base64 || null;
       let bytes = doc.bytes || 0;
       if (!base64) {
-        const dl = await fetchPdfInBackground(doc.url, controller.signal);
-        base64 = dl.base64;
-        bytes = dl.bytes;
+        try {
+          const dl = await fetchPdfInBackground(doc.url, controller.signal);
+          base64 = dl.base64;
+          bytes = dl.bytes;
+        } catch (dlErr) {
+          lastDocError = dlErr;
+          continue; // Wenn dieses Dokument nicht lesbar ist (z.B. ein Vorschaubild), versuche das nächste Dokument
+        }
       }
 
       const hash = await cache.sha256(base64);
@@ -435,10 +483,15 @@ async function analyze({ tabId, pageContext, docs, force }) {
         progress(tabId, 'parse', { label: doc.label, cached: true, pages: extracted.pageCount });
       } else {
         progress(tabId, 'parse', { label: doc.label, sizeKb: Math.round(bytes / 1024) });
-        extracted = await parseInOffscreen(
-          { base64, wantImages: settings.visionFallback, maxPages: settings.visionMaxPages },
-          (detail) => progress(tabId, 'parse-progress', { label: doc.label, ...detail })
-        );
+        try {
+          extracted = await parseInOffscreen(
+            { base64, wantImages: settings.visionFallback, maxPages: settings.visionMaxPages },
+            (detail) => progress(tabId, 'parse-progress', { label: doc.label, ...detail })
+          );
+        } catch (parseErr) {
+          lastDocError = parseErr;
+          continue;
+        }
         // Bilder sind zu groß für den Cache. Dokumente, die Bildseiten brauchen,
         // werden deshalb gar nicht zwischengespeichert - sonst käme der zweite Lauf
         // ohne Bilder in einem anderen Modus heraus und würde erneut Geld kosten.
@@ -462,7 +515,9 @@ async function analyze({ tabId, pageContext, docs, force }) {
       });
     }
 
-    if (!parsed.length) throw new Error('Keine lesbaren PDFs gefunden.');
+    if (!parsed.length) {
+      throw lastDocError || new Error('Keine lesbaren PDFs gefunden.');
+    }
 
     /* ---- 2. Modus bestimmen ---- */
     const withText = parsed.filter((d) => d.charCount > 150);
