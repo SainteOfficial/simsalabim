@@ -7,7 +7,7 @@
   if (window.__vmsInjected) return;
   window.__vmsInjected = true;
 
-  const MAX_DOCS = 3;
+  const MAX_DOCS = 8;
   const VIN_RE = /\b[A-Z0-9]{17}\b/;
 
   /**
@@ -225,6 +225,11 @@
       return { kind: 'condition', score: 200, word: 'Fahrzeug PDF' };
     }
 
+    // BCA Image / Document Endpoints (bcaimage.com/GetDoc.aspx etc.)
+    if (/GetDoc\.aspx/i.test(url) || /InspectionBase/i.test(url)) {
+      return { kind: 'condition', score: 180, word: 'Zustandsbericht' };
+    }
+
     // Wenn die URL direkt ViewPDF.aspx heißt, ist das die primäre BCA-Viewer-Seite
     if (/ViewPDF\.aspx/i.test(url)) {
       return { kind: 'condition', score: 150, word: 'ViewPDF' };
@@ -235,7 +240,7 @@
     const scoreMod = isThumbnail ? -40 : 0;
 
     for (const w of CONDITION_WORDS) if (haystack.includes(w)) return { kind: 'condition', score: 100 + scoreMod, word: w };
-    for (const w of DATASHEET_WORDS) if (haystack.includes(w)) return { kind: 'datasheet', score: 70 + scoreMod, word: w };
+    for (const w of DATASHEET_WORDS) if (haystack.includes(w)) return { kind: 'datasheet', score: 80 + scoreMod, word: w };
 
     for (const w of state.portal?.words || []) {
       if (haystack.includes(w)) return { kind: 'condition', score: 90 + scoreMod, word: w };
@@ -244,12 +249,15 @@
     const extra = (state.settings?.keywords || []).filter(
       (k) => k && ![...CONDITION_WORDS, ...DATASHEET_WORDS].includes(k)
     );
-    for (const w of extra) if (w && haystack.includes(lower(w))) return { kind: 'custom', score: 60 + scoreMod, word: w };
+    for (const w of extra) if (w && haystack.includes(lower(w))) return { kind: 'custom', score: 70 + scoreMod, word: w };
 
     const path = url.split('?')[0].toLowerCase();
-    if (path.endsWith('.pdf')) return { kind: 'pdf', score: 40 + scoreMod, word: '.pdf' };
-    if (/[?&/](pdf|document|report)[=/]/.test(url.toLowerCase()) && /pdf/i.test(haystack)) {
-      return { kind: 'pdf', score: 30 + scoreMod, word: 'pdf' };
+    if (path.endsWith('.pdf')) return { kind: 'pdf', score: 60 + scoreMod, word: '.pdf' };
+    if (/[?&/](pdf|document|report|doc|view|download)[=/]/.test(url.toLowerCase())) {
+      return { kind: 'pdf', score: 50 + scoreMod, word: 'Dokument' };
+    }
+    if (/pdf/i.test(haystack) || /bericht/i.test(haystack) || /spezifikation/i.test(haystack) || /protokoll/i.test(haystack)) {
+      return { kind: 'condition', score: 50 + scoreMod, word: 'Bericht' };
     }
     return null;
   }
