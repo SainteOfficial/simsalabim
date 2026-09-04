@@ -1103,3 +1103,160 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
   .vms-body, .vms-tab-blob { transition: none !important; }
   .vms-bar-track i { transform: none; }
 }
+
+/* ----------------------------------------------------------------- Debug */
+.vms-debug-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.vms-debug-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.vms-debug-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.vms-debug-icon {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.vms-debug-card {
+  padding: 10px 12px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.vms-debug-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.vms-debug-label {
+  color: var(--text-dim);
+  flex: none;
+}
+.vms-debug-val {
+  font-weight: 500;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vms-debug-val.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+}
+.vms-debug-val.err {
+  color: var(--crit);
+  font-weight: 600;
+}
+.vms-debug-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.vms-diag-box {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vms-diag-box.ok {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 25%, transparent);
+  color: var(--ok);
+}
+.vms-diag-box.bad {
+  background: color-mix(in srgb, var(--crit) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--crit) 25%, transparent);
+  color: var(--crit);
+}
+.vms-debug-pre {
+  margin: 4px 0 0;
+  padding: 4px 6px;
+  background: rgba(0,0,0,0.15);
+  border-radius: 6px;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 80px;
+  overflow-y: auto;
+}
+.vms-debug-log-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+}
+.vms-debug-log {
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vms-debug-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.35;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  padding-bottom: 3px;
+}
+.vms-debug-entry:last-child {
+  border-bottom: none;
+}
+.vms-debug-time {
+  color: var(--text-dim);
+  font-size: 9.5px;
+  flex: none;
+}
+.vms-debug-tag {
+  font-weight: 700;
+  font-size: 9.5px;
+  flex: none;
+  color: var(--accent);
+}
+.vms-debug-tag.error {
+  color: var(--crit);
+}
+.vms-debug-tag.success {
+  color: var(--ok);
+}
+.vms-debug-tag.download {
+  color: var(--warn);
+}
+.vms-debug-msg {
+  word-break: break-word;
+  color: var(--text);
+}
+.vms-debug-empty {
+  color: var(--text-dim);
+  text-align: center;
+  padding: 14px 0;
+  font-style: italic;
+}

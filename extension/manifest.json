@@ -8,12 +8,11 @@
   "permissions": [
     "storage",
     "offscreen",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "cookies"
   ],
   "host_permissions": [
-    "https://de.bca-europe.com/*",
-    "https://*.bca-europe.com/*",
-    "https://openrouter.ai/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "src/background.js",
@@ -22,7 +21,11 @@
   "content_scripts": [
     {
       "matches": [
-        "https://de.bca-europe.com/*"
+        "https://de.bca-europe.com/*",
+        "https://*.bca-europe.com/*",
+        "https://*.bca.com/*",
+        "https://*.bca.de/*",
+        "https://*.bca-autoauktionen.de/*"
       ],
       "js": [
         "src/content/content.js"
@@ -55,7 +58,11 @@
         "icons/*"
       ],
       "matches": [
-        "https://de.bca-europe.com/*"
+        "https://de.bca-europe.com/*",
+        "https://*.bca-europe.com/*",
+        "https://*.bca.com/*",
+        "https://*.bca.de/*",
+        "https://*.bca-autoauktionen.de/*"
       ]
     }
   ],

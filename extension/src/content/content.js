@@ -65,8 +65,22 @@
     showAllPageDamages: false,
     scrolled: false,
     closed: false,
-    theme: 'auto'
+    theme: 'auto',
+    view: 'main',
+    debugLogs: [],
+    apiDiagnosis: null,
+    pdfDiagnosis: null,
+    isDiagnosingApi: false,
+    isDiagnosingPdf: false
   };
+
+  function logDebug(tag, message, data = null) {
+    const time = new Date().toLocaleTimeString('de-DE');
+    const entry = { time, tag, message, data };
+    state.debugLogs.push(entry);
+    if (state.debugLogs.length > 80) state.debugLogs.shift();
+    if (state.view === 'debug' && ui) render();
+  }
 
   let ui = null;
   let scanTimer = null;
@@ -473,9 +487,15 @@
   async function runAnalysis({ force = false } = {}) {
     if (state.status === 'busy') return;
 
-    // Port hält den Service Worker zuverlässig am Leben, auch bei langen KI-Anfragen
+    // Port mit aktivem Heartbeat hält den Service Worker zuverlässig am Leben (auch bei 2+ Min KI-Anfragen)
     let keepAlivePort = null;
-    try { keepAlivePort = chrome.runtime.connect({ name: 'keepalive' }); } catch { /* ignore */ }
+    let keepAlivePing = null;
+    try {
+      keepAlivePort = chrome.runtime.connect({ name: 'keepalive' });
+      keepAlivePing = setInterval(() => {
+        try { keepAlivePort?.postMessage({ ping: Date.now() }); } catch { /* ignore */ }
+      }, 10000);
+    } catch { /* ignore */ }
 
     state.status = 'busy';
     state.error = null;
@@ -489,24 +509,33 @@
         done: true
       }
     ];
+    logDebug('ANALYZE', `Starte Analyse (${state.docs.length} Dokumente, Force=${force})`);
     render();
 
     try {
       const payloadDocs = [];
       for (const doc of state.docs) {
         pushStep('download', `Lade ${doc.label}`);
+        logDebug('DOWNLOAD', `Versuche Download im Tab: ${doc.url}`);
         const fetched = await fetchPdfInPage(doc.url);
+        if (fetched) {
+          logDebug('DOWNLOAD', `Erfolgreich im Tab geladen (${Math.round(fetched.bytes / 1024)} KB)`);
+        } else {
+          logDebug('DOWNLOAD', `Tab-Download fehlgeschlagen (CORS/Redirect o.ä.) – Übergabe an Hintergrunddienst.`);
+        }
         payloadDocs.push({ ...doc, base64: fetched?.base64 || null, bytes: fetched?.bytes || 0 });
         completeStep('download', fetched ? `${doc.label} geladen` : `${doc.label} (Download über Hintergrund)`);
       }
 
       pushStep('ai', 'KI analysiert Dokumente');
+      logDebug('AI', `Sende ANALYZE an Service Worker...`);
       const res = await send({
         type: 'ANALYZE',
         payload: { pageContext: state.context, docs: payloadDocs, force }
       });
 
       if (res.ok) {
+        logDebug('SUCCESS', `Analyse erfolgreich abgeschlossen (${res.result?.defects?.length || 0} Mängel)`);
         state.result = res.result;
         state.status = 'done';
         state.progressPct = 100;
@@ -514,13 +543,16 @@
         completeStep('synthesis', 'Bewertung fertig');
         completeStep('ai', 'Analyse fertig');
       } else {
+        logDebug('ERROR', `Analyse fehlgeschlagen: ${res.error}`, { code: res.code });
         state.error = { message: res.error, code: res.code };
         state.status = 'error';
       }
     } catch (err) {
+      logDebug('ERROR', `Unerwarteter Fehler: ${err?.message || err}`);
       state.error = { message: String(err?.message || err), code: 'GENERIC' };
       state.status = 'error';
     } finally {
+      if (keepAlivePing) clearInterval(keepAlivePing);
       try { keepAlivePort?.disconnect(); } catch { /* ignore */ }
     }
     render();
@@ -694,7 +726,63 @@
       render();
     } else if (act === 'open-doc') {
       window.open(btn.dataset.url, '_blank', 'noopener');
+    } else if (act === 'open-debug') {
+      state.view = 'debug';
+      render();
+    } else if (act === 'close-debug') {
+      state.view = 'main';
+      render();
+    } else if (act === 'test-api') {
+      state.isDiagnosingApi = true;
+      render();
+      send({ type: 'DIAGNOSE_API' }).then((res) => {
+        state.isDiagnosingApi = false;
+        state.apiDiagnosis = res;
+        logDebug('TEST_API', res.ok ? `API erreichbar (${res.durationMs}ms, ${res.model})` : `API Fehler: ${res.error}`);
+        render();
+      });
+    } else if (act === 'test-pdf') {
+      const url = state.docs[0]?.url;
+      if (!url) {
+        state.pdfDiagnosis = { ok: false, error: 'Keine PDF-URL auf dieser Seite gefunden.' };
+        render();
+        return;
+      }
+      state.isDiagnosingPdf = true;
+      render();
+      send({ type: 'DIAGNOSE_PDF', payload: { url } }).then((res) => {
+        state.isDiagnosingPdf = false;
+        state.pdfDiagnosis = res;
+        logDebug('TEST_PDF', res.ok ? `PDF Download OK: HTTP ${res.status}, isPdf=${res.isPdf}` : `PDF Fehler: ${res.error}`);
+        render();
+      });
+    } else if (act === 'copy-debug') {
+      copyDebugReport(btn);
     }
+  }
+
+  function copyDebugReport(btn) {
+    const lines = [
+      '### Autosmaya Debug-Report',
+      `- Zeit: ${new Date().toISOString()}`,
+      `- Seite: ${location.href}`,
+      `- Portal: ${state.portal?.id || 'nicht erkannt'}`,
+      `- FIN: ${state.context?.vin || 'nicht gefunden'}`,
+      `- Gefundene Dokumente (${state.docs.length}):`,
+      ...state.docs.map((d) => `  * [${d.kind}] ${d.label} -> ${d.url}`),
+      `- Status: ${state.status}, Tab: ${state.tab}, View: ${state.view}`,
+      `- Letzter Fehler: ${state.error ? JSON.stringify(state.error) : 'keiner'}`,
+      `- Konfiguration: Modell=${state.settings?.model}, Vision=${state.settings?.visionFallback}, Cache=${state.settings?.cacheEnabled}, ApiKeyVorhanden=${Boolean(state.settings?.apiKey)}`,
+      '',
+      '#### Letzte Protokoll-Einträge:',
+      ...state.debugLogs.map((l) => `[${l.time}] [${l.tag}] ${l.message}`),
+      ''
+    ];
+    navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      const old = btn.textContent;
+      btn.textContent = 'Kopiert!';
+      setTimeout(() => { if (btn) btn.textContent = old; }, 1600);
+    });
   }
 
   /** Kleine Pille, mit der sich das geschlossene Panel zurückholen lässt. */
@@ -973,12 +1061,99 @@
   /* -------------------------------------------------------------- Inhalte */
 
   function tabContent() {
+    if (state.view === 'debug') return debugBody();
     if (state.status === 'busy') return busyBody();
     if (state.status === 'error') return errorBody();
     if (state.status !== 'done') return idleBody();
     if (state.tab === 'berechnet') return calcTab();
     if (state.tab === 'meinung') return opinionTab();
     return defectTab();
+  }
+
+  function debugBody() {
+    const doc = state.docs[0];
+    const docUrl = doc?.url || 'Kein Dokument erkannt';
+    const lastErr = state.error?.message || 'Kein Fehler protokolliert';
+    const apiDiag = state.apiDiagnosis;
+    const pdfDiag = state.pdfDiagnosis;
+
+    return `
+      <div class="vms-debug-view">
+        <div class="vms-debug-head">
+          <div class="vms-debug-title">
+            <span class="vms-debug-icon">${debugIcon()}</span>
+            <strong>Diagnose & Systemstatus</strong>
+          </div>
+          <button class="vms-ghost sm" data-act="close-debug">← Zurück</button>
+        </div>
+
+        <div class="vms-debug-card">
+          <div class="vms-debug-row">
+            <span class="vms-debug-label">Aktuelle Seite:</span>
+            <span class="vms-debug-val" title="${esc(location.href)}">${esc(location.pathname + location.search)}</span>
+          </div>
+          <div class="vms-debug-row">
+            <span class="vms-debug-label">Fahrzeug FIN:</span>
+            <span class="vms-debug-val">${esc(state.context?.vin || 'Nicht im DOM gefunden')}</span>
+          </div>
+          <div class="vms-debug-row">
+            <span class="vms-debug-label">PDF-Link:</span>
+            <span class="vms-debug-val mono" title="${esc(docUrl)}">${esc(docUrl)}</span>
+          </div>
+          <div class="vms-debug-row">
+            <span class="vms-debug-label">Letzter Fehler:</span>
+            <span class="vms-debug-val ${state.error ? 'err' : ''}">${esc(lastErr)}</span>
+          </div>
+        </div>
+
+        <div class="vms-debug-actions">
+          <button class="vms-ghost sm" data-act="test-api">
+            ${state.isDiagnosingApi ? '<span class="vms-spin"></span>' : '⚡'} API testen
+          </button>
+          <button class="vms-ghost sm" data-act="test-pdf">
+            ${state.isDiagnosingPdf ? '<span class="vms-spin"></span>' : '📥'} PDF-Download testen
+          </button>
+          <button class="vms-ghost sm" data-act="copy-debug">📋 Report kopieren</button>
+        </div>
+
+        ${apiDiag ? `
+          <div class="vms-diag-box ${apiDiag.ok ? 'ok' : 'bad'}">
+            <strong>API-Verbindungstest (${apiDiag.durationMs}ms):</strong>
+            ${apiDiag.ok
+              ? `<div>Erfolgreich! Modell <code>${esc(apiDiag.model)}</code> antwortet ordnungsgemäß.</div>`
+              : `<div>Fehler: ${esc(apiDiag.error)}</div>`}
+          </div>` : ''}
+
+        ${pdfDiag ? `
+          <div class="vms-diag-box ${pdfDiag.ok && pdfDiag.isPdf ? 'ok' : 'bad'}">
+            <strong>PDF-Download-Test (${pdfDiag.durationMs}ms):</strong>
+            ${pdfDiag.ok
+              ? `<div>Status: HTTP ${pdfDiag.status} | Content-Type: ${esc(pdfDiag.contentType || 'keiner')}</div>
+                 <div>Ergebnis: ${pdfDiag.isPdf ? ' Gültiges PDF (%PDF- Signatur vorhanden)' : '⚠️ Antwort ist kein PDF!'} (${Math.round((pdfDiag.bytesReceived || 0)/1024)} KB)</div>
+                 ${pdfDiag.nestedPdfUrl ? `<div>Gefundener Link im HTML: <code>${esc(pdfDiag.nestedPdfUrl)}</code></div>` : ''}
+                 ${pdfDiag.preview ? `<pre class="vms-debug-pre">${esc(pdfDiag.preview)}</pre>` : ''}`
+              : `<div>Fehler: ${esc(pdfDiag.error)}</div>`}
+          </div>` : ''}
+
+        <div class="vms-debug-log-head">
+          <span>Ereignis-Protokoll (${state.debugLogs.length})</span>
+        </div>
+        <div class="vms-debug-log">
+          ${state.debugLogs.length === 0
+            ? '<div class="vms-debug-empty">Noch keine Log-Ereignisse aufgezeichnet.</div>'
+            : state.debugLogs
+                .slice()
+                .reverse()
+                .map(
+                  (l) => `<div class="vms-debug-entry">
+                     <span class="vms-debug-time">${esc(l.time)}</span>
+                     <span class="vms-debug-tag ${esc((l.tag || '').toLowerCase())}">[${esc(l.tag)}]</span>
+                     <span class="vms-debug-msg">${esc(l.message)}</span>
+                   </div>`
+                )
+                .join('')}
+        </div>
+      </div>`;
   }
 
   function idleBody() {
@@ -1024,6 +1199,7 @@
         ${noKey
           ? '<button class="vms-primary" data-act="options"><span>API-Key eintragen</span></button>'
           : '<button class="vms-primary" data-act="rerun"><span>Erneut versuchen</span></button>'}
+        <button class="vms-ghost" data-act="open-debug"><span>🔍 Debug / Diagnose</span></button>
         ${noKey ? '' : '<button class="vms-ghost" data-act="options">Einstellungen</button>'}
       </div>`;
   }
@@ -1344,6 +1520,8 @@
         <span class="vms-foot-actions">
           <button class="vms-icon sm" data-act="theme" aria-label="Darstellung wechseln"
             title="Darstellung: ${THEME_LABEL[state.theme]}">${themeIcon(state.theme)}</button>
+          <button class="vms-icon sm" data-act="open-debug" aria-label="Diagnose & Debug"
+            title="Diagnose & Systemstatus anzeigen">${debugIcon()}</button>
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="copy">Kopieren</button>' : ''}
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="rerun" title="Cache umgehen und neu auswerten">Neu</button>' : ''}
           <button class="vms-ghost sm" data-act="options">Einstellungen</button>
@@ -1507,6 +1685,8 @@
     ({ thumb: thumbIcon, tag: tagIcon, alert: alertIcon, question: questionIcon }[name] || questionIcon)();
   const checkBig = () =>
     '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>';
+  const debugIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>';
 
   /* ----------------------------------------------------------------- Boot */
 
@@ -1541,6 +1721,7 @@
     state.status = 'idle';
     state.tab = 'maengel';
     state.showAllPageDamages = false;
+    logDebug('SCAN', `Erkannt: ${docs.length} Dokument(e), FIN=${ctx.vin || 'keine'} auf ${location.pathname}`);
 
     await buildUi();
     render();

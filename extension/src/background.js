@@ -127,14 +127,25 @@ function findPdfInHtml(html, baseUrl) {
 /** Fallback-Download im Hintergrund (kein CORS, dafür evtl. ohne Session-Cookies). */
 async function fetchPdfInBackground(url, signal, _depth = 0) {
   if (_depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
-  const res = await fetch(url, {
-    credentials: 'include',
-    signal,
-    redirect: 'follow',
-    headers: { 'Accept': 'application/pdf, application/octet-stream, */*' }
-  });
-  if (!res.ok) throw new Error(`Download fehlgeschlagen (HTTP ${res.status}).`);
-  const buf = await res.arrayBuffer();
+  let res;
+  try {
+    res = await fetch(url, {
+      credentials: 'include',
+      signal,
+      redirect: 'follow',
+      headers: { 'Accept': 'application/pdf, application/octet-stream, */*' }
+    });
+  } catch (err) {
+    if (signal?.aborted) throw new Error('PDF-Download wurde abgebrochen.');
+    throw new Error(`PDF-Download im Hintergrund nicht möglich (${err.message}). URL: ${url}`);
+  }
+  if (!res.ok) throw new Error(`PDF-Download fehlgeschlagen (HTTP ${res.status} ${res.statusText}). URL: ${url}`);
+  let buf;
+  try {
+    buf = await res.arrayBuffer();
+  } catch (err) {
+    throw new Error(`PDF-Daten konnten nicht gelesen werden (${err.message}).`);
+  }
   if (buf.byteLength > MAX_PDF_BYTES) throw new Error('PDF ist zu groß (> 25 MB).');
   if (looksLikePdf(buf)) {
     return { base64: bytesToBase64(buf), bytes: buf.byteLength, finalUrl: res.url };
@@ -155,6 +166,76 @@ async function fetchPdfInBackground(url, signal, _depth = 0) {
     'Möglicherweise erfordert der Download eine aktive Sitzung auf der Auktionsseite – ' +
     'bitte stelle sicher, dass du auf BCA eingeloggt bist und versuche es erneut.'
   );
+}
+
+/** Führt eine detaillierte Diagnose eines PDF-Downloads durch. */
+async function diagnosePdf(url) {
+  const started = Date.now();
+  try {
+    const res = await fetch(url, {
+      credentials: 'include',
+      redirect: 'follow',
+      headers: { 'Accept': 'application/pdf, application/octet-stream, */*' }
+    });
+    const contentType = res.headers.get('content-type') || '';
+    const contentLength = res.headers.get('content-length') || '';
+    const buf = await res.arrayBuffer();
+    const isPdf = looksLikePdf(buf);
+    let preview = '';
+    let nested = null;
+    if (!isPdf) {
+      try {
+        const text = new TextDecoder().decode(buf.slice(0, 4000));
+        preview = text.slice(0, 300).replace(/\s+/g, ' ').trim();
+        nested = findPdfInHtml(text, res.url);
+      } catch { /* ignore */ }
+    }
+    return {
+      ok: true,
+      status: res.status,
+      statusText: res.statusText,
+      contentType,
+      contentLength,
+      bytesReceived: buf.byteLength,
+      isPdf,
+      finalUrl: res.url,
+      nestedPdfUrl: nested,
+      preview: isPdf ? `%PDF Header erkannt (${Math.round(buf.byteLength / 1024)} KB)` : preview,
+      durationMs: Date.now() - started
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: String(err?.message || err),
+      url,
+      durationMs: Date.now() - started
+    };
+  }
+}
+
+/** Testet die OpenRouter-API-Verbindung und gibt genaue Metriken zurück. */
+async function diagnoseApi() {
+  const settings = await getSettings();
+  if (!settings.apiKey) {
+    return { ok: false, error: 'Kein OpenRouter API-Key hinterlegt.' };
+  }
+  const started = Date.now();
+  try {
+    const res = await testKey(settings.apiKey, settings.model, settings.apiBase);
+    return {
+      ok: true,
+      model: res.model,
+      durationMs: Date.now() - started,
+      usage: res.usage
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: String(err?.message || err),
+      model: settings.model,
+      durationMs: Date.now() - started
+    };
+  }
 }
 
 /* ---------------------------------------------------------- Normalisierung */
@@ -726,6 +807,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
       return true;
 
+    case 'DIAGNOSE_PDF':
+      diagnosePdf(msg.payload.url).then((r) => sendResponse(r));
+      return true;
+
+    case 'DIAGNOSE_API':
+      diagnoseApi().then((r) => sendResponse(r));
+      return true;
+
     case 'CACHE_STATS':
       cache.stats().then((s) => sendResponse({ ok: true, stats: s }));
       return true;
@@ -759,7 +848,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // zuverlässig am Leben hält – auch bei langen KI-Anfragen.
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'keepalive') {
-    const ping = setInterval(() => chrome.storage.local.get('keepalive'), 10000);
-    port.onDisconnect.addListener(() => clearInterval(ping));
+    port.onMessage.addListener(() => {
+      // Eingehende Heartbeat-Nachrichten vom Tab setzen den MV3-Inaktivitätstimer zurück
+    });
   }
 });
