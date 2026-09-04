@@ -117,6 +117,20 @@ function isProbablePdfUrl(urlStr) {
   );
 }
 
+function extractRefreshUrl(html, baseUrl) {
+  if (!html) return null;
+  const rawMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'>]+)["']/i) ||
+                    html.match(/url=([^"'\s>]+)/i);
+  if (rawMatch && rawMatch[1]) {
+    let u = rawMatch[1].trim().replace(/^['"]|['"]$/g, '');
+    u = u.replaceAll('&amp;', '&').replaceAll('&#38;', '&');
+    try {
+      return new URL(u, baseUrl).href;
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
 /** Findet PDF-URLs in einer HTML-Antwort (Viewer-Seite, Redirect o.Ä.). */
 function findPdfInHtml(html, baseUrl) {
   if (!html) return null;
@@ -129,8 +143,9 @@ function findPdfInHtml(html, baseUrl) {
     ...html.matchAll(/<frame[^>]+src=["']([^"']+)["']/gi)
   ];
   for (const m of frameMatches) {
-    const src = m[1]?.trim();
+    let src = m[1]?.trim();
     if (!src || src.startsWith('javascript:') || src.startsWith('about:') || NON_PDF_EXT.test(src) || NON_PDF_PATH.test(src)) continue;
+    src = src.replaceAll('&amp;', '&').replaceAll('&#38;', '&');
     try {
       const resolved = new URL(src, baseUrl).href;
       if (resolved !== baseUrl && isProbablePdfUrl(resolved)) return resolved;
@@ -142,12 +157,12 @@ function findPdfInHtml(html, baseUrl) {
   const linkMatches = [
     ...html.matchAll(/<a[^>]+href=["']([^"']+)["']/gi),
     ...html.matchAll(/["'](https?:\/\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|Download|VehId=)[^"'\s<>]*)["']/gi),
-    ...html.matchAll(/["'](\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|VehId=)[^"'\s<>]*)["']/gi),
-    ...html.matchAll(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/gi)
+    ...html.matchAll(/["'](\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|VehId=)[^"'\s<>]*)["']/gi)
   ];
   for (const m of linkMatches) {
-    const target = m[1]?.trim();
+    let target = m[1]?.trim();
     if (!target || NON_PDF_EXT.test(target) || NON_PDF_PATH.test(target)) continue;
+    target = target.replaceAll('&amp;', '&').replaceAll('&#38;', '&');
     if (isProbablePdfUrl(target)) {
       try {
         const resolved = new URL(target, baseUrl).href;
@@ -156,15 +171,20 @@ function findPdfInHtml(html, baseUrl) {
     }
   }
 
-  // 3. JavaScript Weiterleitungen / Variablen
+  // 3. Meta Refresh
+  const metaRef = extractRefreshUrl(html, baseUrl);
+  if (metaRef && metaRef !== baseUrl) return metaRef;
+
+  // 4. JavaScript Weiterleitungen / Variablen
   const jsMatches = [
     ...html.matchAll(/(?:window\.location(?:\.href)?|location\.replace|location\.href)\s*=\s*["']([^"']+)["']/gi),
     ...html.matchAll(/(?:pdfUrl|documentUrl|fileUrl|docUrl|reportUrl)\s*[:=]\s*["']([^"']+)["']/gi),
     ...html.matchAll(/window\.open\s*\(\s*["']([^"']+)["']/gi)
   ];
   for (const m of jsMatches) {
-    const target = m[1]?.trim();
+    let target = m[1]?.trim();
     if (!target || target.startsWith('javascript:') || NON_PDF_EXT.test(target) || NON_PDF_PATH.test(target)) continue;
+    target = target.replaceAll('&amp;', '&').replaceAll('&#38;', '&');
     if (isProbablePdfUrl(target)) {
       try {
         const resolved = new URL(target, baseUrl).href;
@@ -182,7 +202,7 @@ const WAITING_RE = /in Vorbereitung|Bitte warten|wird vorbereitet|wird generiert
 /** Fallback-Download im Hintergrund (kein CORS, dafür evtl. ohne Session-Cookies). */
 async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
   if (_depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
-  if (_waitCount > 25) throw new Error('Das PDF wird von BCA noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
+  if (_waitCount > 35) throw new Error('Das PDF wird von BCA noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
 
   let res;
   // Entferne eventuelle Thumbnail-Parameter wie width=96
@@ -192,7 +212,7 @@ async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
       credentials: 'include',
       signal,
       redirect: 'follow',
-      headers: { 'Accept': 'application/pdf, application/octet-stream, */*' }
+      headers: { 'Accept': 'application/pdf, application/octet-stream, text/html, */*' }
     });
   } catch (err) {
     if (signal?.aborted) throw new Error('PDF-Download wurde abgebrochen.');
@@ -214,16 +234,15 @@ async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
   if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
     try {
       const html = new TextDecoder().decode(buf);
+      const nested = findPdfInHtml(html, res.url || cleanUrl);
 
       // Falls BCA das PDF noch generiert ("in Vorbereitung / Bitte warten"):
-      if (WAITING_RE.test(html) && _waitCount < 25) {
-        const refreshMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/i);
-        const nextUrl = refreshMatch?.[1] ? new URL(refreshMatch[1], cleanUrl).href : cleanUrl;
+      if (WAITING_RE.test(html) && _waitCount < 35) {
+        const nextUrl = nested || extractRefreshUrl(html, cleanUrl) || cleanUrl;
         await sleep(3000);
         return fetchPdfInBackground(nextUrl, signal, _depth, _waitCount + 1);
       }
 
-      const nested = findPdfInHtml(html, res.url || cleanUrl);
       if (nested && nested !== url && nested !== res.url && nested !== cleanUrl) {
         return fetchPdfInBackground(nested, signal, _depth + 1, _waitCount);
       }
