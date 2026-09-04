@@ -1,16 +1,33 @@
 # Autosmaya
 
-Chrome-Extension, die auf Fahrzeugseiten automatisch **Fahrzeug PDF** und **Zustandsbericht**
-findet, die PDFs herunterlädt, **vollständig** ausliest und per KI (OpenRouter) alle Mängel,
-die **berechneten Kosten** und eine **Kaufempfehlung** in einem kleinen Fenster oben rechts anzeigt.
+Chrome-Extension für Auktions- und Händlerportale (u. a. **BCA**): findet auf der
+Fahrzeugseite automatisch **Fahrzeug PDF**, **Appraisal** und **Zustandsbericht**, lädt die
+PDFs, liest sie **vollständig** aus und zeigt die Mängel in einem Panel oben rechts – ohne
+dass man suchen muss.
 
-<p><img src="docs/panel.png" width="380" alt="Panel im hellen Modus">
-<img src="docs/panel-dark.png" width="380" alt="Panel im dunklen Modus"></p>
+Das Panel hat drei Tabs. **Was aufpoppt, sind die Mängel** – nüchtern und ohne Bewertung.
+Die Rechnung und die Einschätzung liegen jeweils einen Klick daneben.
+
+<p><img src="docs/panel.png" width="290" alt="Tab Mängel">
+<img src="docs/panel-berechnet.png" width="290" alt="Tab Berechnet">
+<img src="docs/panel-meinung.png" width="290" alt="Tab Meinung"></p>
+
+| Tab | Inhalt |
+| --- | --- |
+| **Mängel** (Start) | Schäden von der Seite, dann die Liste aus dem PDF – Schwere, TÜV-Relevanz, Kosten, Beleg-Zitat. Keine Meinung. |
+| **Berechnet** | Kostenrechnung aus belegten Beträgen, Kosten je Bereich, Verhandlungshebel |
+| **Meinung** | Kaufempfehlung mit Zustands-Score, Begründungen, Ausschlusskriterien |
+
+Auch der Kopf des Panels und das Toolbar-Symbol bleiben sachlich: dort steht die Zahl der
+Mängel, nicht das Urteil.
 
 ## Was die Extension macht
 
-1. **Erkennen** – findet auf jeder Seite Links wie „Fahrzeug PDF", „Zustandsbericht",
-   „Appraisal", „Gutachten", „Prüfbericht" oder beliebige `.pdf`-Links und liest nebenbei
+0. **Sofort sichtbar** – zeigt Schäden, die das Portal bereits auf der Seite listet, direkt
+   im Panel an („Direkt von der Seite"), noch bevor das PDF ausgewertet ist. Auf BCA sind das
+   die Einträge unter *Schäden*.
+1. **Erkennen** – findet auf jeder Seite Links wie „Fahrzeug PDF", „Appraisal",
+   „Zustandsbericht", „Gutachten", „Prüfbericht" oder beliebige `.pdf`-Links und liest nebenbei
    FIN, Kilometerstand, Erstzulassung und Preis aus der Seite.
    Ein Panel erscheint nur, wenn die Seite wirklich nach einem Fahrzeug aussieht – kein
    Aufpoppen auf Blogs oder Preislisten.
@@ -26,7 +43,8 @@ die **berechneten Kosten** und eine **Kaufempfehlung** in einem kleinen Fenster 
 
 ## Kaufempfehlung
 
-Über der Mängelliste steht das Urteil – auch im eingeklappten Panel im Kopf sichtbar:
+Bewusst **nicht** auf dem Startbildschirm, sondern im Tab **Meinung** – wer nur die Schäden
+sehen will, bekommt keine Bewertung aufgedrängt:
 
 | Urteil | Bedeutung |
 | --- | --- |
@@ -47,11 +65,26 @@ Dazu gibt es:
 - **Preis-Einordnung**, sofern auf der Seite ein Preis steht (wird automatisch mitgelesen)
 
 Das Urteil bewertet ausschließlich den **dokumentierten** Zustand. Es ersetzt keine
-Besichtigung und keine Probefahrt.
+Besichtigung und keine Probefahrt – das steht auch im Tab selbst.
+
+## BCA
+
+Für BCA ist ein eigenes Profil hinterlegt (`bca.com`, `bca.de`, `bca.co.uk` und weitere):
+
+- Die BCA-Bezeichnungen **Appraisal**, **Fahrzeug PDF** und **Schadenaufstellung** zählen dort
+  direkt als Zustandsbericht.
+- Auf einer erkannten BCA-Domain reicht ein gefundenes Dokument – es müssen nicht erst
+  mehrere Fahrzeugmerkmale zusammenkommen.
+- Der Abschnitt **Schäden** der Seite wird ausgelesen und sofort angezeigt, inklusive
+  Tabellen der Form „Bauteil / Beschreibung".
+
+Weitere Portale lassen sich in `PORTALS` (in `src/content/content.js`) mit wenigen Zeilen
+ergänzen. Ohne Profil greift die allgemeine Erkennung, die auf den gängigen Portalen ebenfalls
+funktioniert.
 
 ## Berechnet
 
-Der Block **Berechnet** rechnet zusammen, was das Dokument hergibt – ohne Schätzungen des
+Der Tab **Berechnet** rechnet zusammen, was das Dokument hergibt – ohne Schätzungen des
 Modells. Jede Zeile ist auf belegte Beträge zurückführbar:
 
 | Zeile | Woher |
@@ -65,24 +98,35 @@ Modells. Jede Zeile ist auf belegte Beträge zurückführbar:
 | Verhandlungsziel | Angebotspreis − Summe der Verhandlungshebel |
 
 Steht kein Preis auf der Seite, entfällt der untere Teil und es wird nur die Reparatursumme
-ausgewiesen.
+ausgewiesen. Darunter zeigt ein Balkendiagramm, welcher Bereich (Glas, Karosserie, Lack …)
+wie viel der belegten Kosten ausmacht.
+
+## Oberfläche
+
+Weiche Formen, ruhige Bewegung – nichts springt:
+
+- **Morph beim Tab-Wechsel**: Der Körper des Panels fährt seine Höhe weich auf die neue Größe,
+  der Inhalt blendet dabei leicht versetzt ein.
+- **Tab-Blob**: Der Indikator gleitet unter den aktiven Tab und verformt sich dabei kurz
+  organisch, statt hart zu springen.
+- **Weiche Farbschleier** im Kopf und hinter dem Urteil, langsam driftend.
+- **Kostenbalken** wachsen nacheinander aus dem Nullpunkt.
+- Alles davon respektiert `prefers-reduced-motion`.
 
 ## Sichtbarkeit und Bedienung
 
-- **Toolbar-Symbol** trägt das Ergebnis: farbiges Abzeichen mit der Zahl der kritischen Mängel,
-  im Tooltip das Urteil. Man sieht das Ergebnis, ohne das Panel zu öffnen.
-- **Urteilsleiste**, die beim Scrollen einblendet – Empfehlung, Score und Mängelzahl bleiben
-  immer sichtbar, auch weit unten in der Liste.
+- **Toolbar-Symbol** trägt den Befund: farbiges Abzeichen mit der Zahl der Mängel (rot, sobald
+  kritische dabei sind), im Tooltip die Aufschlüsselung. Sichtbar ohne offenes Panel.
 - **Markierte Links**: die erkannten Dokumente bekommen auf der Seite einen farbigen Rahmen
   (rot = Zustandsbericht, blau = sonstiges PDF). Abschaltbar.
 - **Rückhol-Pille**: geschlossen verschwindet das Panel nicht, sondern schrumpft zu einer
-  kleinen Pille mit Urteil und kritischer Mängelzahl.
+  kleinen Pille mit der Mängelzahl.
 - **Suche und Sortierung** in der Mängelliste (ab 5 Mängeln), sortierbar nach Schwere,
   Kosten oder Seite.
 - **Sprung ins PDF**: Klick auf „Seite 17" öffnet das Dokument direkt auf dieser Seite.
 - **Größe und Position** frei einstellbar und gespeichert; Darstellung automatisch, hell
   oder dunkel per Schalter in der Fußzeile.
-- **Popup** zeigt das Urteil des aktuellen Tabs samt Leseabdeckung.
+- **Popup** zeigt Befund und Leseabdeckung des aktuellen Tabs.
 - **Tastenkürzel**: `Alt+Shift+M` Panel ein-/ausblenden, `Alt+Shift+A` Seite jetzt prüfen,
   `Esc` einklappen. In Chrome frei änderbar.
 
@@ -115,7 +159,7 @@ gesendet. Fahrzeugseiten und PDFs gehen an keinen anderen Server.
 
 Danach passiert alles von selbst: Fahrzeugseite öffnen → Panel erscheint → Urteil steht da.
 
-<p><img src="docs/panel-sticky.png" width="380" alt="Urteilsleiste beim Scrollen"></p>
+<p><img src="docs/panel-instant.png" width="300" alt="Schäden direkt von der Seite, noch während der Analyse"></p>
 
 ## Kosten und Modellwahl
 
@@ -169,8 +213,9 @@ extension/
   manifest.json            Manifest V3
   src/
     background.js          Service Worker: Ablauf, Chunk-Läufe, Zusammenführung, Cache
-    content/content.js     Erkennung, PDF-Download im Seitenkontext, Panel (Shadow DOM)
-    content/panel.css      Panel-Design, hell/dunkel, Animationen
+    content/content.js     Portal-Profile (BCA), Erkennung, Seiten-Schäden, PDF-Download,
+                           Panel mit Tabs (Shadow DOM)
+    content/panel.css      Panel-Design, hell/dunkel, Morph-Animationen
     offscreen/             pdf.js-Textextraktion + Seitenrendering (SW hat kein DOM)
     options/, popup/       Einstellungen und Toolbar-Popup
     lib/config.js          Defaults, Modelle, Preise
@@ -192,7 +237,7 @@ node test/e2e.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension
-ungepackt in Chromium und prüft 81 Punkte, unter anderem:
+ungepackt in Chromium und prüft 90 Punkte, unter anderem:
 
 - Erkennung von Fahrzeugseiten und Fehlalarm-Freiheit auf Blog/Preisliste
 - PDF-Download und Textextraktion inklusive erhaltener Tabellenspalten
@@ -204,8 +249,11 @@ ungepackt in Chromium und prüft 81 Punkte, unter anderem:
 - Cache-Treffer ohne zweiten API-Aufruf, auch für Scan- und Hybrid-Dokumente
 - **Berechnet**: belegte Summe, sicherheitsrelevanter Anteil, Effektivpreis und
   Verhandlungsziel gegen erwartete Beträge geprüft
-- Urteilsleiste beim Scrollen, Suche, Sortierung nach Kosten, Seitensprung, Theme-Schalter,
-  Link-Markierung, Toolbar-Abzeichen, Rückhol-Pille, Esc-Kürzel, Popup-Zustand
+- **BCA**: Der Test leitet `www.bca.com` auf den Fixture-Server um und prüft Portal-Erkennung,
+  „Appraisal" als Zustandsbericht und die sofort angezeigten Schäden von der Seite
+- Tabs: Start auf „Mängel", keine Bewertung dort, Morph der Höhe, wandernder Tab-Blob
+- Suche, Sortierung nach Kosten, Seitensprung, Theme-Schalter, Link-Markierung,
+  Toolbar-Abzeichen, Rückhol-Pille, Esc-Kürzel, Popup-Zustand
 - Aufklapp-Animation, Filter, Einklappen, Optionsseite, reduzierte Bewegung, keine SW-Fehler
 
 Ist Chromium an einem anderen Ort installiert: `CHROME_PATH=/pfad/zu/chrome node test/e2e.mjs`.

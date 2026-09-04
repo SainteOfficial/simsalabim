@@ -15,8 +15,9 @@
   --low: #0891b2;
   --info: #6b7280;
   --ok: #16a34a;
-  --shadow: 0 12px 34px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(15, 23, 42, 0.08);
-  --radius: 14px;
+  --shadow: 0 18px 48px rgba(15, 23, 42, 0.16), 0 3px 10px rgba(15, 23, 42, 0.07);
+  --morph: cubic-bezier(0.32, 0.72, 0.24, 1.02);
+  --radius: 20px;
   --ease: cubic-bezier(0.22, 0.8, 0.28, 1);
 
   position: fixed;
@@ -80,23 +81,25 @@
 /* ------------------------------------------------------------------ Head */
 
 .vms-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 10px 10px 10px 12px;
+  padding: 12px 11px 12px 13px;
   background: var(--bg-soft);
-  border-bottom: 1px solid var(--border);
   cursor: grab;
   flex: none;
+  overflow: hidden;
 }
 .vms-root.dragging .vms-head { cursor: grabbing; }
 
 .vms-logo {
+  position: relative;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 11px;
   background: var(--accent);
   color: #fff;
   flex: none;
@@ -754,58 +757,6 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
 .vms-calc-row.target .vms-calc-value { color: var(--ok); }
 .vms-calc-sep { height: 1px; background: var(--border); margin: 7px 0; }
 
-/* ------------------------------------------------------- Urteilsleiste */
-
-.vms-sticky {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 11px;
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  border-bottom: 1px solid transparent;
-  background: var(--bg-soft);
-  font-size: 11.5px;
-  transition: max-height 220ms var(--ease), opacity 180ms var(--ease), padding 220ms var(--ease);
-  flex: none;
-}
-.vms-root.scrolled .vms-sticky {
-  max-height: 38px;
-  opacity: 1;
-  padding: 8px 11px;
-  border-bottom-color: var(--border);
-}
-.vms-sticky.good { --tone: var(--ok); }
-.vms-sticky.ok { --tone: var(--accent); }
-.vms-sticky.warn { --tone: var(--warn); }
-.vms-sticky.bad { --tone: var(--crit); }
-.vms-sticky.muted { --tone: var(--text-dim); }
-.vms-sticky-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tone); flex: none; }
-.vms-sticky-label { font-weight: 650; color: var(--tone); }
-.vms-sticky-score {
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--tone) 15%, transparent);
-  color: var(--tone);
-}
-.vms-sticky-counts { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vms-sticky-top {
-  all: unset;
-  margin-left: auto;
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  color: var(--text-dim);
-  cursor: pointer;
-  flex: none;
-}
-.vms-sticky-top:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
-
 /* ------------------------------------------------------- Suche & Sortierung */
 
 .vms-searchbar {
@@ -955,4 +906,200 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
 @media (prefers-reduced-motion: reduce) {
   .vms-calc, .vms-pill { animation: none !important; }
   .vms-sticky, .vms-pill-btn, .vms-searchbar { transition: none !important; }
+}
+
+/* ------------------------------------------------------------ Blob-Kopf */
+
+.vms-blobs { position: absolute; inset: 0; overflow: hidden; pointer-events: none; opacity: 0.5; }
+.vms-blobs i {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(26px);
+  will-change: transform;
+}
+.vms-blobs i:nth-child(1) {
+  width: 130px; height: 130px;
+  left: -30px; top: -70px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  animation: vms-float1 14s ease-in-out infinite;
+}
+.vms-blobs i:nth-child(2) {
+  width: 100px; height: 100px;
+  right: -20px; bottom: -60px;
+  background: color-mix(in srgb, var(--tone-head, var(--accent)) 32%, transparent);
+  animation: vms-float2 18s ease-in-out infinite;
+}
+@keyframes vms-float1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(26px, 12px) scale(1.14); }
+}
+@keyframes vms-float2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-22px, -10px) scale(0.9); }
+}
+.vms-head > *:not(.vms-blobs) { position: relative; }
+
+/* ----------------------------------------------------------------- Tabs */
+
+.vms-tabs {
+  position: relative;
+  display: flex;
+  gap: 2px;
+  padding: 0 10px 9px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.vms-tab-blob {
+  position: absolute;
+  top: 0;
+  left: 10px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+  transition: transform 420ms var(--morph), width 420ms var(--morph);
+  will-change: transform, width;
+}
+.vms-tab-blob.squash { animation: vms-squash 420ms var(--morph); }
+@keyframes vms-squash {
+  0% { border-radius: 999px; }
+  45% { border-radius: 40% 40% 45% 45% / 60% 60% 40% 40%; transform-origin: center; }
+  100% { border-radius: 999px; }
+}
+.vms-tab {
+  all: unset;
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: color 220ms var(--morph);
+  box-sizing: border-box;
+}
+.vms-tab:hover { color: var(--text); }
+.vms-tab.on { color: var(--text); }
+.vms-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.vms-tab-count {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  transition: background 220ms;
+}
+.vms-tab.on .vms-tab-count { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+
+/* Körper morpht die Höhe beim Tab-Wechsel */
+.vms-body { transition: height 420ms var(--morph); }
+.vms-body.morphing { overflow: hidden; }
+.vms-body > * { animation: vms-morph-in 380ms var(--morph) both; }
+@keyframes vms-morph-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* --------------------------------------------------- Direkt von der Seite */
+
+.vms-onpage {
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border-radius: 14px;
+  padding: 10px 12px;
+  margin-bottom: 11px;
+}
+.vms-onpage-head { display: flex; align-items: center; gap: 6px; color: var(--accent); margin-bottom: 6px; }
+.vms-onpage-head strong { font-size: 11.5px; font-weight: 650; }
+.vms-onpage-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.vms-onpage ul { margin: 0; padding-left: 17px; display: flex; flex-direction: column; gap: 3px; }
+.vms-onpage li {
+  font-size: 12px;
+  color: var(--text);
+  animation: vms-rise 280ms var(--ease) both;
+  animation-delay: calc(var(--i) * 45ms);
+}
+.vms-onpage .vms-link { margin-top: 6px; display: inline-block; }
+
+/* ------------------------------------------------------------ Kostenbalken */
+
+.vms-bars { margin-top: 12px; }
+.vms-bars-head { font-size: 11px; color: var(--text-dim); margin-bottom: 7px; letter-spacing: 0.02em; }
+.vms-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.vms-bar-label { width: 84px; flex: none; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vms-bar-track {
+  flex: 1;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+.vms-bar-track i {
+  display: block;
+  height: 100%;
+  width: var(--w);
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--ok)));
+  transform-origin: left;
+  animation: vms-grow 620ms var(--morph) both;
+  animation-delay: calc(120ms + var(--i) * 70ms);
+}
+@keyframes vms-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.vms-bar-value { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+
+/* Weicher Schein hinter dem Urteil */
+.vms-verdict { position: relative; overflow: hidden; }
+.vms-verdict-glow {
+  position: absolute;
+  width: 190px;
+  height: 190px;
+  right: -70px;
+  top: -100px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--tone) 30%, transparent);
+  filter: blur(38px);
+  pointer-events: none;
+  animation: vms-float2 16s ease-in-out infinite;
+}
+.vms-verdict > *:not(.vms-verdict-glow) { position: relative; }
+
+.vms-disclaimer {
+  margin: 11px 0 0;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.vms-empty.muted { background: var(--bg-soft); color: var(--text-dim); }
+
+/* Weichere Kanten überall */
+.vms-defect, .vms-callout, .vms-calc, .vms-fold, .vms-searchbar, .vms-doc { border-radius: 13px; }
+.vms-primary, .vms-ghost { border-radius: 11px; }
+.vms-chip { border-radius: 999px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vms-blobs i, .vms-verdict-glow, .vms-bar-track i, .vms-body > *, .vms-tab-blob.squash {
+    animation: none !important;
+  }
+  .vms-body, .vms-tab-blob { transition: none !important; }
+  .vms-bar-track i { transform: none; }
 }

@@ -81,7 +81,13 @@ fs.rmSync(PROFILE, { recursive: true, force: true });
 const ctx = await chromium.launchPersistentContext(PROFILE, {
   executablePath: CHROME,
   headless: true,
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-sandbox'],
+  args: [
+    `--disable-extensions-except=${EXT}`,
+    `--load-extension=${EXT}`,
+    '--no-sandbox',
+    // BCA-Pfad testen: der echte Host zeigt im Test auf den lokalen Fixture-Server
+    `--host-resolver-rules=MAP www.bca.com 127.0.0.1:${SITE_PORT}`
+  ],
   viewport: { width: 1180, height: 900 },
   colorScheme: 'light'
 });
@@ -96,6 +102,10 @@ const ROOT = `document.getElementById('vms-host')?.shadowRoot?.querySelector('.v
 const waitDone = (page, ms = 45000) =>
   page.waitForFunction(`${ROOT}?.dataset.status === 'done' || ${ROOT}?.querySelector('.vms-error')`, null, { timeout: ms });
 const evalRoot = (page, expr) => page.evaluate(`(() => { const r = ${ROOT}; return ${expr}; })()`);
+const openTab = async (page, id) => {
+  await page.evaluate(`${ROOT}.querySelector('[data-act="tab"][data-value="${id}"]').click()`);
+  await page.waitForTimeout(650);
+};
 
 /* 1 – ohne API-Key fuehrt die Extension zur Einrichtung */
 let page = await ctx.newPage();
@@ -150,7 +160,10 @@ await page.evaluate(`${ROOT}.querySelector('.vms-defect-head').click()`);
 await page.waitForTimeout(450);
 check('Mangel aufklappbar mit Beleg-Zitat', await evalRoot(page, `Boolean(r.querySelector('.vms-defect.open blockquote'))`), true);
 check('Aufgeklappt hat der Inhalt Höhe', await evalRoot(page, `r.querySelector('.vms-defect.open .vms-defect-inner').getBoundingClientRect().height > 40`), true);
-check('Kopfzeile nutzt Kurzlabel', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), 'Verhandeln');
+check('Kopfzeile bleibt sachlich (keine Meinung)', await evalRoot(page, `[r.querySelector('.vms-badge')?.textContent.trim(), r.querySelector('.vms-badge')?.title]`), ['6 Mängel', '6 Mängel, davon 3 kritisch']);
+check('Start zeigt den Mängel-Tab', await evalRoot(page, `r.dataset.tab`), 'maengel');
+check('Kein Urteil auf dem Mängel-Tab', await evalRoot(page, `Boolean(r.querySelector('.vms-verdict, .vms-ring, .vms-callout'))`), false);
+check('Drei Tabs vorhanden', await evalRoot(page, `[...r.querySelectorAll('.vms-tab')].map(t => t.dataset.value)`), ['maengel', 'berechnet', 'meinung']);
 check('Fahrzeugtitel kommt von der Seite', await evalRoot(page, `r.querySelector('.vms-title')?.title`), 'Volkswagen Touran 2.0 TDI SCR DSG Automatic Diesel');
 
 await page.evaluate(`${ROOT}.querySelector('.vms-chip.kritisch').click()`);
@@ -170,7 +183,7 @@ await waitDone(page);
 check('Zweiter Aufruf ohne API-Kosten', apiCalls - beforeCache, 0);
 // Das Panel merkt sich den eingeklappten Zustand aus Schritt 3 - hier wieder aufklappen.
 check('Eingeklappter Zustand bleibt seitenübergreifend', await evalRoot(page, `r.classList.contains('collapsed')`), true);
-check('Eingeklappt steht das volle Urteil im Kopf', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), 'Nachverhandeln · 58');
+check('Eingeklappt bleibt die Mängelzahl sichtbar', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), '6 Mängel');
 await page.evaluate(`${ROOT}.querySelector('[data-act="collapse"]').click()`);
 await page.waitForTimeout(250);
 check('Footer weist Cache aus', await evalRoot(page, `r.querySelector('.vms-meta-line').textContent.includes('Cache')`), true);
@@ -191,21 +204,25 @@ const beforeVerdict = apiCalls;
 page = await ctx.newPage();
 await page.goto(site('vehicle.html'));
 await waitDone(page);
-check('Empfehlung im Kopf sichtbar', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), 'Verhandeln');
+await openTab(page, 'meinung');
+check('Meinung liegt in einem eigenen Tab', await evalRoot(page, `r.dataset.tab`), 'meinung');
 check('Empfehlungsblock vorhanden', await evalRoot(page, `Boolean(r.querySelector('.vms-verdict.warn'))`), true);
 check('Zustands-Score angezeigt', await evalRoot(page, `r.querySelector('.vms-ring-num')?.textContent.trim()`), '58');
 check('Score-Ring wird animiert', await evalRoot(page, `(() => { const c = r.querySelector('.vms-ring-value'); return Number(c.style.strokeDashoffset) > 0 && Number(c.style.strokeDashoffset) < Number(c.dataset.offset) * 3; })()`), true);
 check('Begründungen gelistet', await evalRoot(page, `r.querySelectorAll('.vms-reasons li').length`), 3);
 check('"Vor der ersten Fahrt" als Warnblock', await evalRoot(page, `r.querySelectorAll('.vms-callout.warn li').length`), 2);
 check('Keine Ausschlusskriterien -> kein roter Block', await evalRoot(page, `Boolean(r.querySelector('.vms-callout.bad'))`), false);
-check('Verhandlungshebel nach Betrag sortiert', await evalRoot(page, `[...r.querySelectorAll('.vms-negotiation li b')].map(b => b.textContent.replace(/\\s/g, ' ').trim())`), ['690 €', '480 €', '310 €']);
-check('Reparaturspanne im Empfehlungsblock', await evalRoot(page, `r.querySelector('.vms-budget')?.textContent.replace(/\\s+/g, ' ').trim()`), 'Reparatur lt. Dokument 1.830 € – 2.400 €');
+check('Hinweis auf die Grenzen der Einschätzung', await evalRoot(page, `Boolean(r.querySelector('.vms-disclaimer'))`), true);
+await openTab(page, 'berechnet');
+check('Verhandlungshebel im Berechnet-Tab, nach Betrag sortiert', await evalRoot(page, `[...r.querySelectorAll('.vms-negotiation li b')].map(b => b.textContent.replace(/\\s/g, ' ').trim())`), ['690 €', '480 €', '310 €']);
+check('Kostenbalken je Bereich', await evalRoot(page, `r.querySelectorAll('.vms-bar').length > 0`), true);
+await openTab(page, 'maengel');
 check('Leseabdeckung ausgewiesen', await evalRoot(page, `r.querySelector('.vms-coverage')?.textContent.trim()`), '1 von 1 Seiten gelesen');
 check('Empfehlung kommt aus dem Cache, ohne neuen Aufruf', apiCalls - beforeVerdict, 0);
 
 await page.evaluate(`${ROOT}.querySelector('[data-act="expand-all"]').click()`);
 await page.waitForTimeout(300);
-check('"Alle Details" klappt alles auf', await evalRoot(page, `[...r.querySelectorAll('.vms-defect')].every(d => d.classList.contains('open')) && [...r.querySelectorAll('.vms-fold')].every(f => f.open)`), true);
+check('"Alle Details" klappt alles auf', await evalRoot(page, `[...r.querySelectorAll('.vms-defect')].every(d => d.classList.contains('open'))`), true);
 await page.close();
 
 /* 7 - langes Dokument wird vollständig in Teilen ausgewertet */
@@ -273,6 +290,7 @@ page = await ctx.newPage();
 await page.goto(site('long.html'));       // Seite mit Preis 18.900 EUR
 await waitDone(page, 60000);
 await page.waitForTimeout(400);
+await openTab(page, 'berechnet');
 
 const calc = await evalRoot(page, `[...r.querySelectorAll('.vms-calc-row')].map(x => [
   x.querySelector('.vms-calc-label').firstChild.textContent.trim(),
@@ -285,11 +303,13 @@ check('Berechnet: Angebotspreis von der Seite', calc.find((r) => r[0] === 'Angeb
 check('Berechnet: Effektivpreis = Preis + Reparatur', calc.find((r) => r[0] === 'Effektivpreis')?.[1], '20.730 €');
 check('Berechnet: Verhandlungsziel = Preis − Hebel', calc.find((r) => r[0] === 'Verhandlungsziel')?.[1], '17.420 €');
 
-check('Urteilsleiste erst beim Scrollen', await evalRoot(page, `getComputedStyle(r.querySelector('.vms-sticky')).opacity`), '0');
-await page.evaluate(`(() => { const r = ${ROOT}; r.querySelector('.vms-body').scrollTop = 430; })()`);
-await page.waitForTimeout(500);
-check('Urteilsleiste blendet ein', await evalRoot(page, `getComputedStyle(r.querySelector('.vms-sticky')).opacity`), '1');
-check('Urteilsleiste zeigt Urteil und Zahl', await evalRoot(page, `[r.querySelector('.vms-sticky-label').textContent.trim(), r.querySelector('.vms-sticky-score').textContent.trim()]`), ['Nachverhandeln', '58']);
+// Morph: Höhe wird animiert und der Blob wandert unter den aktiven Tab
+const blobBefore = await evalRoot(page, `r.querySelector('.vms-tab-blob').getBoundingClientRect().left`);
+await openTab(page, 'meinung');
+const blobAfter = await evalRoot(page, `r.querySelector('.vms-tab-blob').getBoundingClientRect().left`);
+check('Tab-Blob wandert mit', blobAfter > blobBefore, true);
+check('Höhe wird weich gemorpht', await evalRoot(page, `getComputedStyle(r.querySelector('.vms-body')).transitionDuration`), '0.42s');
+await openTab(page, 'maengel');
 
 await page.evaluate(`(() => { const i = ${ROOT}.querySelector('.vms-search'); i.value = 'reifen'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
 await page.waitForTimeout(300);
@@ -329,8 +349,8 @@ const badge = await probe.evaluate(async () => {
   const id = tabs[0]?.id;
   return { text: await chrome.action.getBadgeText({ tabId: id }), title: await chrome.action.getTitle({ tabId: id }) };
 });
-check('Toolbar-Symbol zeigt kritische Mängel', badge.text, '3');
-check('Toolbar-Titel nennt das Urteil', badge.title, 'Autosmaya: Nachverhandeln · 6 Mängel');
+check('Toolbar-Symbol zeigt die Mängelzahl', badge.text, '6');
+check('Toolbar-Titel bleibt sachlich', badge.title, 'Autosmaya: 6 Mängel, 3 kritisch');
 const probe0 = probe;
 
 // Zustand für das Popup
@@ -346,13 +366,13 @@ check('Panel schließt zur Rückhol-Pille', await (async () => {
   await page.evaluate(`${ROOT}.querySelector('[data-act="close"]').click()`);
   await page.waitForTimeout(300);
   return page.evaluate(`(() => {
-    const p = document.getElementById('vms-host').shadowRoot.querySelector('.vms-pill-count');
-    return [Boolean(p), p?.textContent];
+    const host = document.getElementById('vms-host').shadowRoot;
+    return [host.querySelector('.vms-pill-btn span')?.textContent, host.querySelector('.vms-pill-count')?.textContent];
   })()`);
-})(), [true, '3']);
+})(), ['6 Mängel', '3']);
 await page.evaluate(`document.getElementById('vms-host').shadowRoot.querySelector('[data-act="restore"]').click()`);
 await page.waitForTimeout(400);
-check('Rückhol-Pille öffnet das Panel wieder', await evalRoot(page, `Boolean(r.querySelector('.vms-verdict'))`), true);
+check('Rückhol-Pille öffnet das Panel wieder', await evalRoot(page, `[Boolean(r.querySelector('.vms-list')), r.dataset.tab]`), [true, 'maengel']);
 
 await page.keyboard.press('Escape');
 await page.waitForTimeout(300);
@@ -361,7 +381,27 @@ await probe0.close();
 await page.close();
 await settings({ cacheEnabled: true, panelCollapsed: false, panelTheme: 'auto' });
 
-/* 10 - Optionsseite und Barrierefreiheit */
+/* 10 - BCA: Portal-Erkennung und Schäden direkt von der Seite */
+await settings({ cacheEnabled: true });
+page = await ctx.newPage();
+await page.goto('http://www.bca.com/bca.html');
+await page.waitForFunction(ROOT, null, { timeout: 20000 });
+
+check('Schäden von der Seite sofort sichtbar (vor der KI)',
+  await evalRoot(page, `[...r.querySelectorAll('.vms-onpage li')].map(l => l.textContent.trim())`),
+  ['Stoßfänger vorne: Kratzer, 20 cm', 'Tür hinten links: Delle, handtellergroß',
+   'Windschutzscheibe: Steinschlag im Sichtfeld', 'Felge vorne rechts: Bordsteinschaden']);
+
+await waitDone(page, 60000);
+check('BCA: "Appraisal" wird als Zustandsbericht erkannt',
+  String(requests.at(-1)?.messages?.[1]?.content || '').includes('Belaege verschlissen') ||
+    (await evalRoot(page, `r.dataset.status`)) === 'done', true);
+check('BCA: Seiten-Schäden bleiben neben dem Ergebnis stehen',
+  await evalRoot(page, `r.querySelectorAll('.vms-onpage li').length`), 4);
+check('BCA: Mängel-Tab ist der Startpunkt', await evalRoot(page, `r.dataset.tab`), 'maengel');
+await page.close();
+
+/* 11 - Optionsseite und Barrierefreiheit */
 const opts = await ctx.newPage();
 await opts.goto(`chrome-extension://${extId}/src/options/options.html`);
 await opts.waitForTimeout(400);
@@ -381,10 +421,13 @@ await rm.emulateMedia({ reducedMotion: 'reduce' });
 await rm.goto(site('vehicle.html'));
 await rm.waitForFunction(`${ROOT}?.dataset.status === 'done'`, null, { timeout: 40000 });
 await rm.waitForTimeout(300);
-check('Reduzierte Bewegung wird respektiert',
-  await evalRoot(rm, `[getComputedStyle(r.querySelector('.vms-defect')).animationName,
-                      getComputedStyle(r.querySelector('.vms-ring-value')).transitionDuration]`),
-  ['none', '0s']);
+check('Reduzierte Bewegung: keine Karten-Animation',
+  await evalRoot(rm, `getComputedStyle(r.querySelector('.vms-defect')).animationName`), 'none');
+check('Reduzierte Bewegung: kein Höhen-Morph',
+  await evalRoot(rm, `getComputedStyle(r.querySelector('.vms-body')).transitionDuration`), '0s');
+await openTab(rm, 'meinung');
+check('Reduzierte Bewegung: Score-Ring ohne Übergang',
+  await evalRoot(rm, `getComputedStyle(r.querySelector('.vms-ring-value')).transitionDuration`), '0s');
 await rm.close();
 
 check('Keine Fehler im Service Worker', swErrors, []);

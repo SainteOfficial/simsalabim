@@ -583,22 +583,6 @@ function dedupeTires(tires) {
 
 /* ------------------------------------------------------------ Toolbar-Badge */
 
-const BADGE_COLORS = {
-  kaufen: '#16a34a',
-  kaufen_mit_vorbehalt: '#2563eb',
-  nachverhandeln: '#d97706',
-  finger_weg: '#dc2626',
-  unklar: '#6b7280'
-};
-
-const BADGE_TEXT = {
-  kaufen: 'OK',
-  kaufen_mit_vorbehalt: 'OK',
-  nachverhandeln: '!',
-  finger_weg: 'X',
-  unklar: '?'
-};
-
 async function setBadge(tabId, state, result) {
   if (tabId === undefined) return;
   try {
@@ -615,15 +599,15 @@ async function setBadge(tabId, state, result) {
       return;
     }
     if (state === 'done' && result) {
-      const rec = result.verdict?.recommendation || 'unklar';
-      const crit = result.counts?.kritisch || 0;
-      const text = crit ? String(Math.min(99, crit)) : BADGE_TEXT[rec] || '?';
-      await chrome.action.setBadgeText({ tabId, text });
-      await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLORS[rec] || '#6b7280' });
-      await chrome.action.setTitle({
-        tabId,
-        title: `Autosmaya: ${VERDICT_TITLE[rec] || 'Unklar'} · ${result.defects?.length || 0} Mängel`
-      });
+      // Sachlich nach Schwere, nicht nach Bewertung: die Zahl ist ein Befund.
+      const counts = result.counts || {};
+      const total = result.defects?.length || 0;
+      const color = counts.kritisch ? '#dc2626' : counts.mittel ? '#d97706' : total ? '#0891b2' : '#16a34a';
+      await chrome.action.setBadgeText({ tabId, text: total ? String(Math.min(99, total)) : '0' });
+      await chrome.action.setBadgeBackgroundColor({ tabId, color });
+      const parts = [`${total} Mängel`];
+      if (counts.kritisch) parts.push(`${counts.kritisch} kritisch`);
+      await chrome.action.setTitle({ tabId, title: `Autosmaya: ${parts.join(', ')}` });
       return;
     }
     await chrome.action.setBadgeText({ tabId, text: '' });
@@ -632,14 +616,6 @@ async function setBadge(tabId, state, result) {
     /* Tab kann bereits geschlossen sein */
   }
 }
-
-const VERDICT_TITLE = {
-  kaufen: 'Kaufen',
-  kaufen_mit_vorbehalt: 'Kaufen mit Vorbehalt',
-  nachverhandeln: 'Nachverhandeln',
-  finger_weg: 'Finger weg',
-  unklar: 'Unklar'
-};
 
 chrome.tabs.onUpdated.addListener((tabId, info) => {
   if (info.status === 'loading') setBadge(tabId, 'idle');

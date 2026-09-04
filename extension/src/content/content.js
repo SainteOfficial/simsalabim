@@ -10,6 +10,22 @@
   const MAX_DOCS = 3;
   const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/;
 
+  /**
+   * Portal-Profile. BCA nennt den Zustandsbericht "Appraisal" bzw. "Fahrzeug PDF"
+   * und listet Schäden zusätzlich direkt auf der Seite.
+   */
+  const PORTALS = [
+    {
+      id: 'bca',
+      hosts: ['bca.com', 'bca.de', 'bca.co.uk', 'bca-europe.com', 'bcaeurope.com', 'bca-autoauktionen.de'],
+      words: [
+        'appraisal', 'fahrzeug pdf', 'vehicle pdf', 'zustandsbericht', 'schadenaufstellung',
+        'schadensaufstellung', 'damage list', 'vehicle report', 'fahrzeugbericht'
+      ],
+      damageHeadings: ['schäden', 'schaden', 'damages', 'damage', 'mängel', 'appraisal', 'zustand']
+    }
+  ];
+
   const CONDITION_WORDS = [
     'zustandsbericht', 'zustandsberichte', 'appraisal', 'gutachten', 'prüfbericht',
     'pruefbericht', 'schadenbericht', 'schadensbericht', 'condition report',
@@ -20,8 +36,17 @@
     'fahrzeugdaten', 'car pdf', 'fahrzeugschein'
   ];
 
+  function portalFor(hostname) {
+    const host = (hostname || '').toLowerCase();
+    return (
+      PORTALS.find((p) => p.hosts.some((h) => host === h || host.endsWith('.' + h))) || null
+    );
+  }
+
   const state = {
     settings: null,
+    portal: null,
+    pageDamages: [],
     docs: [],
     context: {},
     status: 'idle',
@@ -36,6 +61,8 @@
     progressPct: null,
     search: '',
     sort: 'schwere',
+    tab: 'maengel',
+    showAllPageDamages: false,
     scrolled: false,
     closed: false,
     theme: 'auto'
@@ -160,6 +187,10 @@
     for (const w of CONDITION_WORDS) if (haystack.includes(w)) return { kind: 'condition', score: 100, word: w };
     for (const w of DATASHEET_WORDS) if (haystack.includes(w)) return { kind: 'datasheet', score: 70, word: w };
 
+    for (const w of state.portal?.words || []) {
+      if (haystack.includes(w)) return { kind: 'condition', score: 90, word: w };
+    }
+
     const extra = (state.settings?.keywords || []).filter(
       (k) => k && ![...CONDITION_WORDS, ...DATASHEET_WORDS].includes(k)
     );
@@ -193,6 +224,85 @@
     markLinks(docs);
     // Das DOM-Element bleibt lokal - es wird nicht an den Hintergrunddienst geschickt.
     return docs.map(({ el, ...rest }) => rest);
+  }
+
+  const DAMAGE_HEADINGS = [
+    'schäden', 'schaden', 'schadensliste', 'schadenaufstellung', 'mängel', 'maengel',
+    'beschädigungen', 'damages', 'damage', 'damage list', 'condition', 'zustand',
+    'appraisal', 'befund', 'beanstandungen'
+  ];
+
+  const DAMAGE_NOISE =
+    /^(mehr|weniger|alle|details|schlie|close|zeig|show|drucken|print|zurück|weiter|filter|sortier|cookie|anmeld|login|newsletter)/i;
+
+  /**
+   * Liest Schäden, die das Portal bereits auf der Seite anzeigt.
+   * Damit steht der Schaden sofort im Panel - noch bevor das PDF ausgewertet ist.
+   */
+  function scrapeOnPageDamages() {
+    const headings = [
+      ...document.querySelectorAll('h1,h2,h3,h4,h5,h6,summary,legend,caption,th,[role="heading"]')
+    ].slice(0, 600);
+    const words = [...DAMAGE_HEADINGS, ...(state.portal?.damageHeadings || [])];
+    const out = [];
+    const seen = new Set();
+
+    const add = (text) => {
+      const clean = norm(text);
+      if (clean.length < 4 || clean.length > 180) return;
+      if (DAMAGE_NOISE.test(clean)) return;
+      const key = lower(clean);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(clean);
+    };
+
+    for (const h of headings) {
+      const label = lower(h.innerText || h.textContent).slice(0, 60);
+      if (!label || !words.some((w) => label.includes(w))) continue;
+
+      // Tabellenkopf -> zugehörige Spalte, sonst der folgende Block
+      const table = h.closest('table');
+      if (h.tagName === 'TH' && table) {
+        const index = [...h.parentElement.children].indexOf(h);
+        for (const row of [...table.querySelectorAll('tbody tr')].slice(0, 40)) {
+          const cells = [...row.children];
+          const value = cells[index]?.innerText;
+          if (!value) continue;
+          const first = cells[0] === cells[index] ? '' : norm(cells[0]?.innerText || '');
+          add(first && first !== norm(value) ? `${first}: ${norm(value)}` : value);
+        }
+        continue;
+      }
+
+      const container =
+        h.closest('details') ||
+        h.nextElementSibling ||
+        h.parentElement?.querySelector('table, ul, ol, dl') ||
+        h.parentElement;
+      if (!container) continue;
+
+      const rows = container.querySelectorAll?.('tbody tr, li, dd, .row, [class*="damage" i], [class*="schaden" i]');
+      if (rows?.length) {
+        for (const row of [...rows].slice(0, 40)) add(rowText(row));
+      } else if (container !== h) {
+        norm(container.innerText || '')
+          .split(/\s{2,}|\n/)
+          .slice(0, 25)
+          .forEach(add);
+      }
+      if (out.length >= 40) break;
+    }
+    return out.slice(0, 25);
+  }
+
+  /** Tabellenzeile lesbar zusammensetzen: "Bauteil: Beschreibung". */
+  function rowText(row) {
+    const cells = [...(row.children || [])]
+      .map((c) => norm(c.innerText))
+      .filter((t) => t && t.length < 120);
+    if (cells.length >= 2) return `${cells[0]}: ${cells.slice(1).join(' · ')}`;
+    return row.innerText;
   }
 
   const MARK_ATTR = 'data-autosmaya';
@@ -291,6 +401,7 @@
 
   function isVehiclePage(docs, ctx) {
     if (!docs.length) return false;
+    if (state.portal) return true; // bekanntes Auktionsportal
     if (docs.some((d) => d.kind === 'condition')) return true;
     const signals = [ctx.vin, ctx.erstzulassung, ctx.kilometer, ctx.inventarnummer].filter(Boolean);
     return signals.length >= 2 || (Boolean(ctx.vin) && docs.length > 0);
@@ -384,6 +495,7 @@
       state.result = res.result;
       state.status = 'done';
       state.progressPct = 100;
+      state.tab = 'maengel'; // Was aufpoppt, sind die Mängel - nicht die Meinung.
       completeStep('synthesis', 'Bewertung fertig');
       completeStep('ai', 'Analyse fertig');
     } else {
@@ -537,6 +649,11 @@
       btn.setAttribute('aria-expanded', String(open));
       if (open) state.openDefects.add(card.dataset.id);
       else state.openDefects.delete(card.dataset.id);
+    } else if (act === 'tab') {
+      switchTab(btn.dataset.value);
+    } else if (act === 'more-onpage') {
+      state.showAllPageDamages = true;
+      render();
     } else if (act === 'theme') {
       state.theme = THEME_ORDER[(THEME_ORDER.indexOf(state.theme) + 1) % THEME_ORDER.length];
       chrome.storage.local.set({ panelTheme: state.theme });
@@ -563,15 +680,15 @@
   function showPill() {
     if (!ui) return;
     const r = state.result;
-    const meta = r ? VERDICT_META[r.verdict?.recommendation] || VERDICT_META.unklar : null;
+    const crit = r?.counts?.kritisch || 0;
+    const tone = !r ? 'muted' : crit ? 'bad' : r.defects.length ? 'warn' : 'good';
     ui.root.className = 'vms-pill';
     ui.root.removeAttribute('style');
     ui.root.innerHTML = `
-      <button class="vms-pill-btn ${meta ? meta.tone : 'muted'}" data-act="restore"
-        title="Autosmaya wieder öffnen">
+      <button class="vms-pill-btn ${tone}" data-act="restore" title="Autosmaya wieder öffnen">
         ${carIcon()}
-        ${r ? `<span>${meta.label}</span>` : '<span>Autosmaya</span>'}
-        ${r?.counts?.kritisch ? `<span class="vms-pill-count">${r.counts.kritisch}</span>` : ''}
+        <span>${r ? `${r.defects.length} Mängel` : 'Autosmaya'}</span>
+        ${crit ? `<span class="vms-pill-count">${crit}</span>` : ''}
       </button>`;
   }
 
@@ -640,68 +757,169 @@
     ausstattung: 'Ausstattung', dokumente: 'Dokumente', sonstiges: 'Sonstiges'
   };
 
+  const TABS = [
+    { id: 'maengel', label: 'Mängel' },
+    { id: 'berechnet', label: 'Berechnet' },
+    { id: 'meinung', label: 'Meinung' }
+  ];
+
+  const SORTERS = {
+    schwere: (a, b) =>
+      ({ kritisch: 0, mittel: 1, gering: 2, hinweis: 3 })[a.severity] -
+      ({ kritisch: 0, mittel: 1, gering: 2, hinweis: 3 })[b.severity],
+    kosten: (a, b) => (b.estimated_cost_eur || 0) - (a.estimated_cost_eur || 0),
+    seite: (a, b) => (a.source_page || 999) - (b.source_page || 999)
+  };
+
+  const searchText = (d) =>
+    `${d.title} ${d.description} ${d.area} ${CATEGORY_LABEL[d.category] || d.category} ${d.quote || ''}`
+      .toLowerCase();
+
+  const defectId = (d) => `${d.title}|${d.area}`.toLowerCase().replace(/\s+/g, '-').slice(0, 80);
+
+  function primaryDocUrl() {
+    const docs = state.result?.meta?.coverage?.documents || [];
+    return docs[0]?.url || state.docs[0]?.url || null;
+  }
+
+  function condClass(c) {
+    return ({ 'sehr gut': 'good', gut: 'good', befriedigend: 'mid', mangelhaft: 'bad' })[c] || 'unknown';
+  }
+
+  /* ------------------------------------------------------------ Grundgerüst */
+
   function render() {
     if (!ui) return;
     const { root } = ui;
     root.dataset.status = state.status;
+    root.dataset.tab = state.tab;
     if (state.theme === 'auto') delete root.dataset.theme;
     else root.dataset.theme = state.theme;
-    root.classList.toggle('scrolled', state.scrolled);
     root.classList.toggle('collapsed', Boolean(state.collapsed));
+
     root.innerHTML =
       header() +
-      (state.collapsed ? '' : body() + footer()) +
-      (state.collapsed ? '' : '<div class="vms-resize" title="Größe ändern" aria-hidden="true"></div>');
+      (state.collapsed
+        ? ''
+        : tabBar() +
+          `<div class="vms-body" data-tab="${state.tab}">${tabContent()}</div>` +
+          footer() +
+          '<div class="vms-resize" title="Größe ändern" aria-hidden="true"></div>');
+
     attachDrag();
     attachResize();
-    attachScroll();
     attachSearch();
+    positionBlob(false);
     animateScore();
     applySize();
   }
 
-  /** Score-Ring erst nach dem Einfügen animieren, damit der Übergang läuft. */
+  /** Wechselt den Tab und morpht dabei Höhe und Inhalt ineinander. */
+  function switchTab(id) {
+    if (id === state.tab || !ui) return;
+    const body = ui.root.querySelector('.vms-body');
+    if (!body) {
+      state.tab = id;
+      render();
+      return;
+    }
+
+    const from = body.getBoundingClientRect().height;
+    state.tab = id;
+    ui.root.dataset.tab = id;
+
+    body.classList.add('morphing');
+    body.innerHTML = tabContent();
+    body.dataset.tab = id;
+    body.style.height = 'auto';
+    const target = Math.min(maxBodyHeight(), body.scrollHeight);
+    body.style.height = `${from}px`;
+    void body.offsetHeight; // Reflow, damit der Übergang startet
+
+    requestAnimationFrame(() => {
+      body.style.height = `${target}px`;
+    });
+    body.addEventListener(
+      'transitionend',
+      (e) => {
+        if (e.propertyName !== 'height') return;
+        body.style.height = '';
+        body.classList.remove('morphing');
+      },
+      { once: true }
+    );
+
+    ui.root.querySelectorAll('.vms-tab').forEach((t) => {
+      const on = t.dataset.value === id;
+      t.classList.toggle('on', on);
+      t.setAttribute('aria-selected', String(on));
+    });
+    positionBlob(true);
+    attachSearch();
+    animateScore();
+  }
+
+  function maxBodyHeight() {
+    const total = state.size?.height || Math.min(window.innerHeight * 0.78, 760);
+    return Math.max(160, total - 132);
+  }
+
+  /** Der Tab-Indikator gleitet als weicher Blob mit kurzem Nachfedern. */
+  function positionBlob(animate) {
+    const bar = ui.root.querySelector('.vms-tabs');
+    const blob = ui.root.querySelector('.vms-tab-blob');
+    const active = ui.root.querySelector('.vms-tab.on');
+    if (!bar || !blob || !active) return;
+    const b = bar.getBoundingClientRect();
+    const a = active.getBoundingClientRect();
+    blob.style.transition = animate ? '' : 'none';
+    blob.style.width = `${a.width}px`;
+    blob.style.transform = `translateX(${a.left - b.left}px)`;
+    if (animate) {
+      blob.classList.remove('squash');
+      void blob.offsetWidth;
+      blob.classList.add('squash');
+    } else {
+      requestAnimationFrame(() => (blob.style.transition = ''));
+    }
+  }
+
   function animateScore() {
     const ring = ui?.root.querySelector('.vms-ring-value');
     if (!ring) return;
     const target = Number(ring.dataset.offset);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      ring.style.strokeDashoffset = String(target);
-    }));
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        ring.style.strokeDashoffset = String(target);
+      })
+    );
   }
+
+  /* ----------------------------------------------------------------- Kopf */
 
   function header() {
     const r = state.result;
-    const crit = r?.counts?.kritisch || 0;
-    const total = r?.defects?.length || 0;
     let badge = '';
     if (state.status === 'done') {
-      const v = r?.verdict?.recommendation;
-      const meta = VERDICT_META[v];
-      badge = meta
-        ? `<span class="vms-badge ${meta.tone}" title="${meta.label}${
-            typeof r.verdict?.score === 'number' ? ` (Zustands-Score ${r.verdict.score}/100)` : ''
-          }">${
-            state.collapsed
-              ? `${meta.label}${typeof r.verdict?.score === 'number' ? ` · ${r.verdict.score}` : ''}`
-              : meta.short
-          }</span>`
-        : total
-          ? `<span class="vms-badge ${crit ? 'bad' : 'warn'}">${total} Mängel</span>`
-          : '<span class="vms-badge good">Keine Mängel</span>';
+      const crit = r?.counts?.kritisch || 0;
+      const total = r?.defects?.length || 0;
+      // Sachlich: nur die Zahl. Die Bewertung steht im Tab "Meinung".
+      badge = total
+        ? `<span class="vms-badge ${crit ? 'bad' : 'warn'}"
+             title="${total} Mängel${crit ? `, davon ${crit} kritisch` : ''}">${total} Mängel</span>`
+        : '<span class="vms-badge good">Ohne Befund</span>';
     } else if (state.status === 'busy') {
       badge = '<span class="vms-badge busy">Prüft…</span>';
     } else if (state.status === 'error') {
       badge = '<span class="vms-badge bad">Fehler</span>';
     }
 
-    // Der Seitentitel gehört zum Fahrzeug, das der Nutzer gerade ansieht - er hat Vorrang
-    // vor dem Titel aus dem Dokument.
     const title = esc(state.context.titel || state.result?.vehicle?.title || 'Fahrzeug-Check');
     const sub = [state.context.vin, state.context.kilometer].filter(Boolean).map(esc).join(' · ');
 
     return `
       <header class="vms-head" data-drag>
+        <div class="vms-blobs" aria-hidden="true"><i></i><i></i></div>
         <div class="vms-logo">${carIcon()}</div>
         <div class="vms-titles">
           <div class="vms-title" title="${title}">${title}</div>
@@ -712,47 +930,49 @@
           <button class="vms-icon" data-act="collapse" aria-label="Ein-/Ausklappen" title="Ein-/Ausklappen (Esc)">${state.collapsed ? chevronDown() : chevronUp()}</button>
           <button class="vms-icon" data-act="close" aria-label="Schließen" title="Schließen">${xIcon()}</button>
         </div>
-      </header>
-      ${state.status === 'done' ? stickyBar() : ''}`;
+      </header>`;
   }
 
-  /** Kompakte Leiste, die beim Scrollen einblendet, damit das Urteil sichtbar bleibt. */
-  function stickyBar() {
+  function tabBar() {
+    if (state.status !== 'done') return '';
     const r = state.result;
-    const v = r?.verdict || {};
-    const meta = VERDICT_META[v.recommendation] || VERDICT_META.unklar;
-    const crit = r?.counts?.kritisch || 0;
+    const count = { maengel: r.defects.length, berechnet: 0, meinung: 0 };
     return `
-      <div class="vms-sticky ${meta.tone}">
-        <span class="vms-sticky-dot"></span>
-        <span class="vms-sticky-label">${meta.label}</span>
-        ${typeof v.score === 'number' ? `<span class="vms-sticky-score">${v.score}</span>` : ''}
-        <span class="vms-sticky-counts">${r.defects.length} Mängel${crit ? `, ${crit} kritisch` : ''}</span>
-        <button class="vms-sticky-top" data-act="scroll-top" title="Nach oben">${chevronUp()}</button>
-      </div>`;
+      <nav class="vms-tabs" role="tablist">
+        <span class="vms-tab-blob" aria-hidden="true"></span>
+        ${TABS.map(
+          (t) => `<button class="vms-tab ${t.id === state.tab ? 'on' : ''}" role="tab"
+                    aria-selected="${t.id === state.tab}" data-act="tab" data-value="${t.id}">
+                    ${esc(t.label)}${count[t.id] ? `<span class="vms-tab-count">${count[t.id]}</span>` : ''}
+                  </button>`
+        ).join('')}
+      </nav>`;
   }
 
-  function body() {
+  /* -------------------------------------------------------------- Inhalte */
+
+  function tabContent() {
     if (state.status === 'busy') return busyBody();
     if (state.status === 'error') return errorBody();
-    if (state.status === 'done') return resultBody();
-    return idleBody();
+    if (state.status !== 'done') return idleBody();
+    if (state.tab === 'berechnet') return calcTab();
+    if (state.tab === 'meinung') return opinionTab();
+    return defectTab();
   }
 
   function idleBody() {
     return `
-      <div class="vms-body">
-        <div class="vms-docs">
-          ${state.docs
-            .map(
-              (d, i) => `<div class="vms-doc" style="--i:${i}"><span class="vms-dot ${d.kind}"></span>
-                <span class="vms-doc-label">${esc(d.label)}</span>
-                <button class="vms-link" data-act="open-doc" data-url="${esc(d.url)}">öffnen</button></div>`
-            )
-            .join('')}
-        </div>
-        <button class="vms-primary" data-act="run">${searchIcon()}<span>Mängel prüfen</span></button>
-      </div>`;
+      ${pageDamageBlock()}
+      <div class="vms-docs">
+        ${state.docs
+          .map(
+            (d, i) => `<div class="vms-doc" style="--i:${i}"><span class="vms-dot ${d.kind}"></span>
+              <span class="vms-doc-label">${esc(d.label)}</span>
+              <button class="vms-link" data-act="open-doc" data-url="${esc(d.url)}">öffnen</button></div>`
+          )
+          .join('')}
+      </div>
+      <button class="vms-primary" data-act="run">${searchIcon()}<span>Mängel prüfen</span></button>`;
   }
 
   function busyBody() {
@@ -766,39 +986,52 @@
       )
       .join('');
     const pct = state.progressPct;
-    return `<div class="vms-body">
+    return `
+      ${pageDamageBlock()}
       <div class="vms-progress">
         <div class="vms-progress-bar ${pct === null ? 'indeterminate' : ''}" ${pct !== null ? `style="width:${pct}%"` : ''}></div>
       </div>
-      <ul class="vms-steps">${steps}</ul>
-    </div>`;
+      <ul class="vms-steps">${steps}</ul>`;
   }
 
   function errorBody() {
     const noKey = state.error?.code === 'NO_API_KEY';
     return `
-      <div class="vms-body">
-        <div class="vms-error">${alertIcon()}<span>${esc(state.error?.message || 'Unbekannter Fehler')}</span></div>
-        <div class="vms-row">
-          ${noKey
-            ? '<button class="vms-primary" data-act="options"><span>API-Key eintragen</span></button>'
-            : '<button class="vms-primary" data-act="rerun"><span>Erneut versuchen</span></button>'}
-          ${noKey ? '' : '<button class="vms-ghost" data-act="options">Einstellungen</button>'}
-        </div>
+      ${pageDamageBlock()}
+      <div class="vms-error">${alertIcon()}<span>${esc(state.error?.message || 'Unbekannter Fehler')}</span></div>
+      <div class="vms-row">
+        ${noKey
+          ? '<button class="vms-primary" data-act="options"><span>API-Key eintragen</span></button>'
+          : '<button class="vms-primary" data-act="rerun"><span>Erneut versuchen</span></button>'}
+        ${noKey ? '' : '<button class="vms-ghost" data-act="options">Einstellungen</button>'}
       </div>`;
   }
 
-  function resultBody() {
-    const r = state.result;
-    const v = r.verdict || {};
+  /** Schäden, die das Portal selbst anzeigt - sofort sichtbar, ohne Analyse. */
+  function pageDamageBlock() {
+    if (!state.pageDamages.length) return '';
+    const shown = state.pageDamages.slice(0, state.showAllPageDamages ? 25 : 5);
+    return `
+      <section class="vms-onpage">
+        <div class="vms-onpage-head">${eyeIcon()}<strong>Direkt von der Seite</strong>
+          <span class="vms-onpage-count">${state.pageDamages.length}</span></div>
+        <ul>${shown.map((t, i) => `<li style="--i:${i}">${esc(t)}</li>`).join('')}</ul>
+        ${state.pageDamages.length > shown.length
+          ? `<button class="vms-link" data-act="more-onpage">alle ${state.pageDamages.length} anzeigen</button>`
+          : ''}
+      </section>`;
+  }
 
-    if (!r.report_found && !r.defects.length) {
-      return `<div class="vms-body">
-        ${verdictBlock(v, r)}
+  /* ------------------------------------------------------------ Tab Mängel */
+
+  function defectTab() {
+    const r = state.result;
+    if (!r.defects.length) {
+      return `
+        ${pageDamageBlock()}
         <div class="vms-empty">${checkBig()}<div><strong>Keine Mängel dokumentiert</strong>
-        <p>${esc(r.summary || 'Im PDF stehen keine Zustands- oder Mängelangaben.')}</p></div></div>
-        ${coverageBlock()}
-      </div>`;
+          <p>${esc(r.report_found ? 'Im Dokument sind keine Schäden vermerkt.' : 'Das Dokument enthält keine Zustandsangaben.')}</p></div></div>
+        ${coverageBlock()}`;
     }
 
     const counts = r.counts || {};
@@ -820,182 +1053,29 @@
     const showSearch = r.defects.length >= 5;
 
     return `
-      <div class="vms-body">
-        ${verdictBlock(v, r)}
-        ${calcBlock(r)}
-        ${listBlock(v.deal_breakers, 'bad', alertIcon(), 'Ausschlusskriterien')}
-        ${listBlock(v.before_first_drive, 'warn', wrenchIcon(), 'Vor der ersten Fahrt')}
-        ${r.summary ? `<p class="vms-lead">${esc(r.summary)}</p>` : ''}
-        <div class="vms-toolbar">
-          <div class="vms-chips">${chips}</div>
-          <button class="vms-ghost sm" data-act="expand-all">${state.expandAll ? 'Zuklappen' : 'Alle Details'}</button>
-        </div>
-        ${showSearch
-          ? `<div class="vms-searchbar">
-               <span class="vms-search-icon">${searchIcon()}</span>
-               <input class="vms-search" type="search" placeholder="Mängel durchsuchen…"
-                 value="${esc(state.search)}" aria-label="Mängel durchsuchen" />
-               <select class="vms-sort" aria-label="Sortierung" data-act="sort">
-                 <option value="schwere"${state.sort === 'schwere' ? ' selected' : ''}>Schwere</option>
-                 <option value="kosten"${state.sort === 'kosten' ? ' selected' : ''}>Kosten</option>
-                 <option value="seite"${state.sort === 'seite' ? ' selected' : ''}>Seite</option>
-               </select>
-             </div>
-             <div class="vms-hits" hidden></div>`
-          : ''}
-        <div class="vms-list">${visible.map((d, i) => defectCard(d, i)).join('')}</div>
-        <div class="vms-nohits" hidden>Kein Mangel passt zu dieser Suche.</div>
-        ${negotiationBlock(v)}
-        ${tiresBlock(r)}
-        ${r.missing_info?.length ? `<div class="vms-missing"><strong>Nicht im Dokument:</strong> ${esc(r.missing_info.join(', '))}</div>` : ''}
-        ${coverageBlock()}
-      </div>`;
-  }
-
-  function verdictBlock(v, r) {
-    const meta = VERDICT_META[v.recommendation] || VERDICT_META.unklar;
-    const cond = r.overall_condition && r.overall_condition !== 'unbekannt'
-      ? `<span class="vms-cond ${condClass(r.overall_condition)}">${esc(r.overall_condition)}</span>`
-      : '';
-    const budget = budgetText(v, r);
-
-    return `
-      <section class="vms-verdict ${meta.tone}">
-        <div class="vms-verdict-head">
-          ${scoreRing(v.score, meta.tone)}
-          <div class="vms-verdict-main">
-            <div class="vms-verdict-label">${verdictIcon(meta.icon)}<span>${meta.label}</span></div>
-            ${v.headline ? `<p class="vms-verdict-line">${esc(v.headline)}</p>` : ''}
-          </div>
-        </div>
-        ${v.reasons?.length
-          ? `<ul class="vms-reasons">${v.reasons.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>`
-          : ''}
-        ${v.price_assessment ? `<p class="vms-price">${tagIcon()}<span>${esc(v.price_assessment)}</span></p>` : ''}
-        <div class="vms-verdict-foot">
-          ${cond}
-          ${budget ? `<span class="vms-budget">${budget}</span>` : ''}
-          ${r.confidence !== null ? `<span class="vms-conf" title="Sicherheit der Auswertung">Sicherheit ${Math.round((r.confidence || 0) * 100)} %</span>` : ''}
-        </div>
-      </section>`;
-  }
-
-  function budgetText(v, r) {
-    const min = v.repair_budget_min_eur ?? r.total_estimated_repair_cost_eur;
-    const max = v.repair_budget_max_eur;
-    if (typeof min !== 'number') return '';
-    if (typeof max === 'number' && max > min) {
-      return `Reparatur lt. Dokument <b>${esc(fmtCost(min))} – ${esc(fmtCost(max))}</b>`;
-    }
-    return `Reparatur lt. Dokument <b>${esc(fmtCost(min))}</b>`;
-  }
-
-  function scoreRing(score, tone) {
-    if (typeof score !== 'number') {
-      return `<div class="vms-ring empty ${tone}">${questionIcon()}</div>`;
-    }
-    const R = 22;
-    const circumference = 2 * Math.PI * R;
-    const offset = circumference * (1 - Math.min(100, Math.max(0, score)) / 100);
-    return `
-      <div class="vms-ring ${tone}">
-        <svg viewBox="0 0 52 52" width="52" height="52" aria-hidden="true">
-          <circle class="vms-ring-track" cx="26" cy="26" r="${R}" />
-          <circle class="vms-ring-value" cx="26" cy="26" r="${R}"
-            style="stroke-dasharray:${circumference.toFixed(1)};stroke-dashoffset:${circumference.toFixed(1)}"
-            data-offset="${offset.toFixed(1)}" />
-        </svg>
-        <span class="vms-ring-num">${score}</span>
-      </div>`;
-  }
-
-  function calcBlock(r) {
-    const n = computeNumbers(r, state.context);
-    if (n.documented === null && n.price === null && !n.reportTotal) return '';
-
-    const row = (label, value, hint, cls = '') =>
-      `<div class="vms-calc-row ${cls}">
-         <span class="vms-calc-label">${esc(label)}${hint ? `<small>${esc(hint)}</small>` : ''}</span>
-         <span class="vms-calc-value">${value}</span>
-       </div>`;
-
-    const repairRows = [];
-    if (n.documented !== null) {
-      repairRows.push(
-        row(
-          'Reparatur belegt',
-          esc(fmtCost(n.documented)),
-          `${n.documentedCount} von ${n.totalCount} Positionen beziffert`
-        )
-      );
-    }
-    if (n.reportTotal !== null && n.reportTotal !== n.documented) {
-      repairRows.push(row('Summe laut Dokument', esc(fmtCost(n.reportTotal))));
-    }
-    if (n.urgent !== null) {
-      repairRows.push(
-        row(
-          'davon sicherheitsrelevant',
-          esc(fmtCost(n.urgent)),
-          n.urgentOpen ? `+ ${n.urgentOpen} Position(en) ohne Betrag` : '',
-          'urgent'
-        )
-      );
-    }
-    if (n.withoutAmount) {
-      repairRows.push(
-        row('Ohne Betrag im Dokument', `${n.withoutAmount} Position${n.withoutAmount > 1 ? 'en' : ''}`, '', 'open')
-      );
-    }
-
-    const priceRows = [];
-    if (n.price !== null) {
-      priceRows.push(row('Angebotspreis', esc(fmtCost(n.price))));
-      if (n.effective !== null) {
-        priceRows.push(row('Effektivpreis', esc(fmtCost(n.effective)), 'Preis + belegte Reparatur', 'strong'));
-      }
-      if (n.target !== null) {
-        priceRows.push(row('Verhandlungsziel', esc(fmtCost(n.target)), 'Preis − Verhandlungshebel', 'target'));
-      }
-    } else if (n.negotiation !== null) {
-      priceRows.push(row('Verhandlungshebel gesamt', esc(fmtCost(n.negotiation)), '', 'target'));
-    }
-
-    return `
-      <section class="vms-calc">
-        <div class="vms-calc-head">${calcIcon()}<strong>Berechnet</strong>
-          <span class="vms-calc-note">nur belegte Beträge</span></div>
-        ${repairRows.join('')}
-        ${repairRows.length && priceRows.length ? '<div class="vms-calc-sep"></div>' : ''}
-        ${priceRows.join('')}
-      </section>`;
-  }
-
-  function listBlock(items, tone, icon, title) {
-    if (!items?.length) return '';
-    return `
-      <section class="vms-callout ${tone}">
-        <div class="vms-callout-head">${icon}<strong>${title}</strong></div>
-        <ul>${items.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>
-      </section>`;
-  }
-
-  function negotiationBlock(v) {
-    if (!v.negotiation_points?.length) return '';
-    const sum = v.negotiation_points.reduce((a, p) => a + (p.amount_eur || 0), 0);
-    return `
-      <details class="vms-fold" ${state.expandAll ? 'open' : ''}>
-        <summary>${tagIcon()}<span>Verhandlungshebel (${v.negotiation_points.length})</span>
-          ${sum ? `<span class="vms-fold-sum">${esc(fmtCost(sum))}</span>` : ''}</summary>
-        <ul class="vms-negotiation">
-          ${v.negotiation_points
-            .map(
-              (p) =>
-                `<li><span>${esc(p.point)}</span>${p.amount_eur ? `<b>${esc(fmtCost(p.amount_eur))}</b>` : ''}</li>`
-            )
-            .join('')}
-        </ul>
-      </details>`;
+      ${pageDamageBlock()}
+      <div class="vms-toolbar">
+        <div class="vms-chips">${chips}</div>
+        <button class="vms-ghost sm" data-act="expand-all">${state.expandAll ? 'Zuklappen' : 'Alle Details'}</button>
+      </div>
+      ${showSearch
+        ? `<div class="vms-searchbar">
+             <span class="vms-search-icon">${searchIcon()}</span>
+             <input class="vms-search" type="search" placeholder="Mängel durchsuchen…"
+               value="${esc(state.search)}" aria-label="Mängel durchsuchen" />
+             <select class="vms-sort" aria-label="Sortierung" data-act="sort">
+               <option value="schwere"${state.sort === 'schwere' ? ' selected' : ''}>Schwere</option>
+               <option value="kosten"${state.sort === 'kosten' ? ' selected' : ''}>Kosten</option>
+               <option value="seite"${state.sort === 'seite' ? ' selected' : ''}>Seite</option>
+             </select>
+           </div>
+           <div class="vms-hits" hidden></div>`
+        : ''}
+      <div class="vms-list">${visible.map((d, i) => defectCard(d, i)).join('')}</div>
+      <div class="vms-nohits" hidden>Kein Mangel passt zu dieser Suche.</div>
+      ${tiresBlock(r)}
+      ${r.missing_info?.length ? `<div class="vms-missing"><strong>Nicht im Dokument:</strong> ${esc(r.missing_info.join(', '))}</div>` : ''}
+      ${coverageBlock()}`;
   }
 
   function defectCard(d, index) {
@@ -1026,25 +1106,6 @@
           ${d.quote ? `<blockquote>${esc(d.quote)}</blockquote>` : ''}
         </div></div></div>
       </article>`;
-  }
-
-  const SORTERS = {
-    schwere: (a, b) =>
-      ({ kritisch: 0, mittel: 1, gering: 2, hinweis: 3 })[a.severity] -
-      ({ kritisch: 0, mittel: 1, gering: 2, hinweis: 3 })[b.severity],
-    kosten: (a, b) => (b.estimated_cost_eur || 0) - (a.estimated_cost_eur || 0),
-    seite: (a, b) => (a.source_page || 999) - (b.source_page || 999)
-  };
-
-  const searchText = (d) =>
-    `${d.title} ${d.description} ${d.area} ${CATEGORY_LABEL[d.category] || d.category} ${d.quote || ''}`
-      .toLowerCase();
-
-  const defectId = (d) => `${d.title}|${d.area}`.toLowerCase().replace(/\s+/g, '-').slice(0, 80);
-
-  function primaryDocUrl() {
-    const docs = state.result?.meta?.coverage?.documents || [];
-    return docs[0]?.url || state.docs[0]?.url || null;
   }
 
   function tiresBlock(r) {
@@ -1079,9 +1140,168 @@
       ${c.complete ? checkIcon() : alertIcon()}<span>${esc(bits.join(' · '))}</span></div>`;
   }
 
-  function condClass(c) {
-    return ({ 'sehr gut': 'good', gut: 'good', befriedigend: 'mid', mangelhaft: 'bad' })[c] || 'unknown';
+  /* --------------------------------------------------------- Tab Berechnet */
+
+  function calcTab() {
+    const r = state.result;
+    const n = computeNumbers(r, state.context);
+
+    const row = (label, value, hint, cls = '') =>
+      `<div class="vms-calc-row ${cls}">
+         <span class="vms-calc-label">${esc(label)}${hint ? `<small>${esc(hint)}</small>` : ''}</span>
+         <span class="vms-calc-value">${value}</span>
+       </div>`;
+
+    const repairRows = [];
+    if (n.documented !== null) {
+      repairRows.push(
+        row('Reparatur belegt', esc(fmtCost(n.documented)), `${n.documentedCount} von ${n.totalCount} Positionen beziffert`)
+      );
+    }
+    if (n.reportTotal !== null && n.reportTotal !== n.documented) {
+      repairRows.push(row('Summe laut Dokument', esc(fmtCost(n.reportTotal))));
+    }
+    if (n.urgent !== null) {
+      repairRows.push(
+        row('davon sicherheitsrelevant', esc(fmtCost(n.urgent)),
+          n.urgentOpen ? `+ ${n.urgentOpen} Position(en) ohne Betrag` : '', 'urgent')
+      );
+    }
+    if (n.withoutAmount) {
+      repairRows.push(row('Ohne Betrag im Dokument', `${n.withoutAmount} Position${n.withoutAmount > 1 ? 'en' : ''}`, '', 'open'));
+    }
+
+    const priceRows = [];
+    if (n.price !== null) {
+      priceRows.push(row('Angebotspreis', esc(fmtCost(n.price))));
+      if (n.effective !== null) {
+        priceRows.push(row('Effektivpreis', esc(fmtCost(n.effective)), 'Preis + belegte Reparatur', 'strong'));
+      }
+      if (n.target !== null) {
+        priceRows.push(row('Verhandlungsziel', esc(fmtCost(n.target)), 'Preis − Verhandlungshebel', 'target'));
+      }
+    } else if (n.negotiation !== null) {
+      priceRows.push(row('Verhandlungshebel gesamt', esc(fmtCost(n.negotiation)), '', 'target'));
+    }
+
+    if (!repairRows.length && !priceRows.length) {
+      return `<div class="vms-empty muted">${calcIcon()}<div><strong>Nichts zu rechnen</strong>
+        <p>Im Dokument stehen keine Beträge, und auf der Seite wurde kein Preis gefunden.</p></div></div>`;
+    }
+
+    const byCategory = {};
+    for (const d of r.defects) {
+      if (typeof d.estimated_cost_eur !== 'number') continue;
+      const key = CATEGORY_LABEL[d.category] || d.category;
+      byCategory[key] = (byCategory[key] || 0) + d.estimated_cost_eur;
+    }
+    const cats = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+    const max = cats.length ? cats[0][1] : 0;
+
+    return `
+      <section class="vms-calc">
+        <div class="vms-calc-head">${calcIcon()}<strong>Kosten</strong>
+          <span class="vms-calc-note">nur belegte Beträge</span></div>
+        ${repairRows.join('')}
+        ${repairRows.length && priceRows.length ? '<div class="vms-calc-sep"></div>' : ''}
+        ${priceRows.join('')}
+      </section>
+      ${cats.length
+        ? `<section class="vms-bars">
+             <div class="vms-bars-head">Nach Bereich</div>
+             ${cats
+               .map(
+                 ([name, sum], i) => `<div class="vms-bar" style="--i:${i}">
+                     <span class="vms-bar-label">${esc(name)}</span>
+                     <span class="vms-bar-track"><i style="--w:${Math.round((sum / max) * 100)}%"></i></span>
+                     <span class="vms-bar-value">${esc(fmtCost(sum))}</span>
+                   </div>`
+               )
+               .join('')}
+           </section>`
+        : ''}
+      ${negotiationBlock(r.verdict || {})}`;
   }
+
+  function negotiationBlock(v) {
+    if (!v.negotiation_points?.length) return '';
+    const sum = v.negotiation_points.reduce((a, p) => a + (p.amount_eur || 0), 0);
+    return `
+      <details class="vms-fold" ${state.expandAll ? 'open' : ''}>
+        <summary>${tagIcon()}<span>Verhandlungshebel (${v.negotiation_points.length})</span>
+          ${sum ? `<span class="vms-fold-sum">${esc(fmtCost(sum))}</span>` : ''}</summary>
+        <ul class="vms-negotiation">
+          ${v.negotiation_points
+            .map((p) => `<li><span>${esc(p.point)}</span>${p.amount_eur ? `<b>${esc(fmtCost(p.amount_eur))}</b>` : ''}</li>`)
+            .join('')}
+        </ul>
+      </details>`;
+  }
+
+  /* ----------------------------------------------------------- Tab Meinung */
+
+  function opinionTab() {
+    const r = state.result;
+    const v = r.verdict || {};
+    const meta = VERDICT_META[v.recommendation] || VERDICT_META.unklar;
+
+    return `
+      <section class="vms-verdict ${meta.tone}">
+        <div class="vms-verdict-glow" aria-hidden="true"></div>
+        <div class="vms-verdict-head">
+          ${scoreRing(v.score, meta.tone)}
+          <div class="vms-verdict-main">
+            <div class="vms-verdict-label">${verdictIcon(meta.icon)}<span>${meta.label}</span></div>
+            ${v.headline ? `<p class="vms-verdict-line">${esc(v.headline)}</p>` : ''}
+          </div>
+        </div>
+        ${v.reasons?.length
+          ? `<ul class="vms-reasons">${v.reasons.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>`
+          : ''}
+        ${v.price_assessment ? `<p class="vms-price">${tagIcon()}<span>${esc(v.price_assessment)}</span></p>` : ''}
+        <div class="vms-verdict-foot">
+          ${r.overall_condition && r.overall_condition !== 'unbekannt'
+            ? `<span class="vms-cond ${condClass(r.overall_condition)}">${esc(r.overall_condition)}</span>`
+            : ''}
+          ${r.confidence !== null ? `<span class="vms-conf">Sicherheit ${Math.round((r.confidence || 0) * 100)} %</span>` : ''}
+        </div>
+      </section>
+      ${listBlock(v.deal_breakers, 'bad', alertIcon(), 'Ausschlusskriterien')}
+      ${listBlock(v.before_first_drive, 'warn', wrenchIcon(), 'Vor der ersten Fahrt')}
+      ${r.summary ? `<p class="vms-lead">${esc(r.summary)}</p>` : ''}
+      <p class="vms-disclaimer">Einschätzung allein aus den verlinkten Dokumenten – ersetzt keine
+        Besichtigung und keine Probefahrt.</p>`;
+  }
+
+  function scoreRing(score, tone) {
+    if (typeof score !== 'number') {
+      return `<div class="vms-ring empty ${tone}">${questionIcon()}</div>`;
+    }
+    const R = 22;
+    const circumference = 2 * Math.PI * R;
+    const offset = circumference * (1 - Math.min(100, Math.max(0, score)) / 100);
+    return `
+      <div class="vms-ring ${tone}">
+        <svg viewBox="0 0 52 52" width="52" height="52" aria-hidden="true">
+          <circle class="vms-ring-track" cx="26" cy="26" r="${R}" />
+          <circle class="vms-ring-value" cx="26" cy="26" r="${R}"
+            style="stroke-dasharray:${circumference.toFixed(1)};stroke-dashoffset:${circumference.toFixed(1)}"
+            data-offset="${offset.toFixed(1)}" />
+        </svg>
+        <span class="vms-ring-num">${score}</span>
+      </div>`;
+  }
+
+  function listBlock(items, tone, icon, title) {
+    if (!items?.length) return '';
+    return `
+      <section class="vms-callout ${tone}">
+        <div class="vms-callout-head">${icon}<strong>${title}</strong></div>
+        <ul>${items.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>
+      </section>`;
+  }
+
+  /* ---------------------------------------------------------------- Fuß */
 
   function footer() {
     const meta = state.result?.meta;
@@ -1111,21 +1331,6 @@
   }
 
   /* ------------------------------------------------------- Interaktionen */
-
-  /** Blendet die Urteilsleiste ein, sobald der Empfehlungsblock weggescrollt ist. */
-  function attachScroll() {
-    const body = ui.root.querySelector('.vms-body');
-    if (!body) return;
-    body.scrollTop = state.scrollTop || 0;
-    body.addEventListener('scroll', () => {
-      state.scrollTop = body.scrollTop;
-      const scrolled = body.scrollTop > 90;
-      if (scrolled !== state.scrolled) {
-        state.scrolled = scrolled;
-        ui.root.classList.toggle('scrolled', scrolled);
-      }
-    });
-  }
 
   /** Sucht direkt im DOM, damit der Cursor im Suchfeld nicht verloren geht. */
   function attachSearch() {
@@ -1267,6 +1472,8 @@
       light: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>',
       dark: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>'
     })[mode] || '';
+  const eyeIcon = () =>
+    '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>';
   const calcIcon = () =>
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 7.5h7"/><path d="M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01"/></svg>';
   const tireIcon = () =>
@@ -1286,6 +1493,7 @@
     const res = await send({ type: 'GET_SETTINGS' });
     if (!res.ok) return;
     state.settings = res.settings;
+    state.portal = portalFor(location.hostname);
     state.collapsed = state.settings.panelCollapsed;
     state.theme = state.settings.panelTheme || 'auto';
     state.size = state.settings.panelSize || null;
@@ -1295,6 +1503,7 @@
     const docs = findDocuments();
     if (!docs.length) return;
     const ctx = scrapeContext();
+    state.pageDamages = scrapeOnPageDamages();
     if (!isVehiclePage(docs, ctx)) return;
 
     const key = `${location.href}|${docs.map((d) => d.url).join(',')}`;
@@ -1305,6 +1514,8 @@
     state.result = null;
     state.error = null;
     state.status = 'idle';
+    state.tab = 'maengel';
+    state.showAllPageDamages = false;
 
     await buildUi();
     render();
