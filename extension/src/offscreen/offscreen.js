@@ -31,7 +31,13 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
-async function parsePdf({ base64, wantImages = false, maxPages = 6, maxTextPages = 40 }) {
+async function parsePdf({
+  base64,
+  wantImages = false,
+  maxPages = 6,
+  maxTextPages = 300,
+  requestId = null
+}) {
   const bytes = base64ToBytes(base64);
 
   const doc = await pdfjs.getDocument({
@@ -46,12 +52,18 @@ async function parsePdf({ base64, wantImages = false, maxPages = 6, maxTextPages
   const pageCount = doc.numPages;
   const limit = Math.min(pageCount, maxTextPages);
   const pageTexts = [];
+  const pageStats = [];
 
   for (let p = 1; p <= limit; p++) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
-    pageTexts.push(layoutText(content.items));
+    const text = layoutText(content.items);
+    pageTexts.push(text);
+    pageStats.push({ page: p, chars: text.replace(/\s/g, '').length });
     page.cleanup();
+    if (limit > 8 && (p % 5 === 0 || p === limit)) {
+      report(requestId, { done: p, total: limit });
+    }
   }
 
   const text = pageTexts
@@ -59,25 +71,46 @@ async function parsePdf({ base64, wantImages = false, maxPages = 6, maxTextPages
     .join('\n\n')
     .trim();
 
-  const charCount = text.replace(/--- Seite \d+ ---/g, '').replace(/\s/g, '').length;
+  const charCount = pageStats.reduce((a, s) => a + s.chars, 0);
   const avgPerPage = charCount / Math.max(1, limit);
+
+  // Seiten ohne verwertbaren Text: Scan-Seiten, Fotoseiten, Schadensskizzen
+  const sparsePages = pageStats.filter((s) => s.chars < 40).map((s) => s.page);
   const looksScanned = charCount < 200 || avgPerPage < 80;
+  const hasSparsePages = !looksScanned && sparsePages.length > 0;
 
   const result = {
     text,
     charCount,
     pageCount,
     parsedPages: limit,
+    pageStats,
+    sparsePages,
     looksScanned,
-    images: []
+    hasSparsePages,
+    complete: limit === pageCount,
+    images: [],
+    imagePages: []
   };
 
-  if (wantImages && looksScanned) {
-    result.images = await renderPages(doc, Math.min(pageCount, maxPages));
+  if (wantImages && (looksScanned || hasSparsePages)) {
+    const targets = looksScanned
+      ? Array.from({ length: Math.min(pageCount, maxPages) }, (_, i) => i + 1)
+      : sparsePages.slice(0, maxPages);
+    const rendered = await renderPages(doc, targets, requestId);
+    result.images = rendered.images;
+    result.imagePages = rendered.pages;
   }
 
   await doc.destroy();
   return result;
+}
+
+function report(requestId, detail) {
+  if (!requestId) return;
+  chrome.runtime
+    .sendMessage({ type: 'OFFSCREEN_PROGRESS', requestId, detail })
+    .catch(() => {});
 }
 
 /**
@@ -134,10 +167,11 @@ function layoutText(items) {
     .join('\n');
 }
 
-/** Rendert Seiten als JPEG-DataURLs für die Vision-Auswertung gescannter PDFs. */
-async function renderPages(doc, count) {
+/** Rendert die angegebenen Seiten als JPEG-DataURLs für die Bilderkennung. */
+async function renderPages(doc, pageNumbers, requestId) {
   const images = [];
-  for (let p = 1; p <= count; p++) {
+  const pages = [];
+  for (const p of pageNumbers) {
     const page = await doc.getPage(p);
     const base = page.getViewport({ scale: 1 });
     const scale = Math.min(2.2, MAX_RENDER_DIMENSION / Math.max(base.width, base.height));
@@ -152,10 +186,12 @@ async function renderPages(doc, count) {
 
     await page.render({ canvasContext: ctx, viewport, intent: 'print' }).promise;
     images.push(canvas.toDataURL('image/jpeg', 0.72));
+    pages.push(p);
 
     canvas.width = 0;
     canvas.height = 0;
     page.cleanup();
+    report(requestId, { rendered: pages.length, total: pageNumbers.length });
   }
-  return images;
+  return { images, pages };
 }

@@ -117,6 +117,15 @@ button { font: inherit; cursor: pointer; border-radius: 9px; }
 .status.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: var(--ok); }
 .status.err { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
 .muted { color: var(--dim); font-size: 12.5px; }
+.hint {
+  margin: 0 0 15px;
+  padding: 9px 11px;
+  background: var(--bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  color: var(--dim);
+  font-size: 12px;
+}
 
 .bar {
   position: fixed;

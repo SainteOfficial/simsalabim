@@ -30,7 +30,10 @@
     steps: [],
     pageKey: '',
     filter: 'alle',
-    dismissed: new Set()
+    dismissed: new Set(),
+    openDefects: new Set(),
+    expandAll: false,
+    progressPct: null
   };
 
   let ui = null;
@@ -141,7 +144,9 @@
       kilometer: ['km-stand', 'kilometerstand', 'laufleistung', 'mileage', 'km'],
       inventarnummer: ['inventarnummer', 'inventory', 'lagernummer'],
       kraftstoff: ['kraftstoff', 'fuel'],
-      getriebe: ['getriebe', 'transmission']
+      getriebe: ['getriebe', 'transmission'],
+      preis: ['preis', 'kaufpreis', 'verkaufspreis', 'startpreis', 'sofortkauf', 'price', 'buy now'],
+      leistung: ['leistung', 'ps', 'kw', 'power']
     };
     const ctx = {};
 
@@ -182,6 +187,14 @@
     if (!ctx.kilometer) {
       const km = norm(document.body?.innerText || '').match(/([\d][\d.\s']{2,9})\s?km\b/i);
       if (km) ctx.kilometer = km[1].trim() + ' km';
+    }
+    if (!ctx.preis) {
+      // Preis nur uebernehmen, wenn er als solcher ausgezeichnet ist - sonst lieber keiner.
+      const text = norm(document.body?.innerText || '').slice(0, 20000);
+      const m = text.match(
+        /(?:Preis|Kaufpreis|Sofortkauf|Startpreis|Price)[^0-9]{0,15}((?:\d{1,3}[.\s])?\d{1,3}(?:[.,]\d{2})?)\s*(?:€|EUR)/i
+      ) || text.match(/(?:€|EUR)\s?((?:\d{1,3}[.\s])?\d{3}(?:[.,]\d{2})?)\b/);
+      if (m) ctx.preis = `${m[1].trim()} EUR`;
     }
     return ctx;
   }
@@ -252,7 +265,15 @@
     state.status = 'busy';
     state.error = null;
     state.result = null;
-    state.steps = [{ key: 'scan', label: `${state.docs.length} Dokument(e) gefunden`, done: true }];
+    state.progressPct = null;
+    state.openDefects.clear();
+    state.steps = [
+      {
+        key: 'scan',
+        label: state.docs.length === 1 ? '1 Dokument gefunden' : `${state.docs.length} Dokumente gefunden`,
+        done: true
+      }
+    ];
     render();
 
     const payloadDocs = [];
@@ -272,6 +293,8 @@
     if (res.ok) {
       state.result = res.result;
       state.status = 'done';
+      state.progressPct = 100;
+      completeStep('synthesis', 'Bewertung fertig');
       completeStep('ai', 'Analyse fertig');
     } else {
       state.error = { message: res.error, code: res.code };
@@ -295,17 +318,58 @@
     render();
   }
 
+  const MODE_LABEL = {
+    text: 'Text',
+    hybrid: 'Text + Bildseiten',
+    vision: 'Scan / Bilderkennung',
+    chunked: 'in Teilen'
+  };
+
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type !== 'PROGRESS') return;
+    const d = msg.detail || {};
+
     if (msg.step === 'parse') {
-      pushStep('parse', msg.detail?.cached ? 'Text aus Cache' : `Lese PDF-Text (${msg.detail?.label || ''})`);
-      completeStep('parse');
+      if (d.cached) completeStep('parse', `Text aus Cache${d.pages ? ` (${d.pages} Seiten)` : ''}`);
+      else pushStep('parse', `Lese PDF${d.label ? `: ${d.label}` : ''}`);
+    }
+    if (msg.step === 'parse-progress') {
+      const step = state.steps.find((x) => x.key === 'parse');
+      if (step) {
+        if (d.total && d.done) {
+          step.hint = `Seite ${d.done}/${d.total}`;
+          state.progressPct = Math.round((d.done / d.total) * 45);
+        } else if (d.rendered) {
+          step.hint = `Bildseite ${d.rendered}/${d.total}`;
+        }
+        render();
+      }
     }
     if (msg.step === 'ai') {
-      pushStep('ai', `KI analysiert (${msg.detail?.mode === 'vision' ? 'Scan/Bilderkennung' : 'Text'})`);
+      completeStep('parse');
+      state.progressPct = 55;
+      pushStep(
+        'ai',
+        d.chunks > 1
+          ? `KI wertet ${d.chunks} Teile aus`
+          : `KI analysiert (${MODE_LABEL[d.mode] || 'Text'})`
+      );
+    }
+    if (msg.step === 'chunk') {
+      const step = state.steps.find((x) => x.key === 'ai');
+      if (step) {
+        step.hint = `Teil ${d.done}/${d.total}`;
+        state.progressPct = 55 + Math.round((d.done / d.total) * 35);
+        render();
+      }
+    }
+    if (msg.step === 'synthesis') {
+      completeStep('ai', 'Alle Teile ausgewertet');
+      state.progressPct = 92;
+      pushStep('synthesis', 'Gesamtbewertung wird erstellt');
     }
     if (msg.step === 'cached') {
-      completeStep('ai', 'Ergebnis aus Cache (0 Kosten)');
+      completeStep('ai', 'Ergebnis aus Cache (keine Kosten)');
     }
   });
 
@@ -370,7 +434,15 @@
       render();
     } else if (act === 'toggle-defect') {
       const card = btn.closest('.vms-defect');
-      card.classList.toggle('open');
+      const open = !card.classList.contains('open');
+      card.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', String(open));
+      if (open) state.openDefects.add(card.dataset.id);
+      else state.openDefects.delete(card.dataset.id);
+    } else if (act === 'expand-all') {
+      state.expandAll = !state.expandAll;
+      if (!state.expandAll) state.openDefects.clear();
+      render();
     } else if (act === 'open-doc') {
       window.open(btn.dataset.url, '_blank', 'noopener');
     }
@@ -379,27 +451,65 @@
   function copyResult(btn) {
     const r = state.result;
     if (!r) return;
+    const v = r.verdict || {};
+    const meta = VERDICT_META[v.recommendation];
+    const c = r.meta?.coverage;
+
     const lines = [
       r.vehicle?.title || state.context.titel || 'Fahrzeug',
       state.context.vin ? `FIN: ${state.context.vin}` : '',
-      `Zustand: ${r.overall_condition}`,
+      state.context.kilometer ? `Laufleistung: ${state.context.kilometer}` : '',
+      '',
+      `EMPFEHLUNG: ${meta ? meta.label.toUpperCase() : 'UNKLAR'}${typeof v.score === 'number' ? ` (Zustands-Score ${v.score}/100)` : ''}`,
+      v.headline || '',
+      ...(v.reasons || []).map((x) => `  - ${x}`),
+      v.deal_breakers?.length ? `\nAUSSCHLUSSKRITERIEN:\n${v.deal_breakers.map((x) => `  - ${x}`).join('\n')}` : '',
+      v.before_first_drive?.length ? `\nVOR DER ERSTEN FAHRT:\n${v.before_first_drive.map((x) => `  - ${x}`).join('\n')}` : '',
+      v.negotiation_points?.length
+        ? `\nVERHANDLUNGSHEBEL:\n${v.negotiation_points.map((p) => `  - ${p.point}${p.amount_eur ? ` (${fmtCost(p.amount_eur)})` : ''}`).join('\n')}`
+        : '',
+      `\nZUSTAND: ${r.overall_condition}`,
       r.summary,
       '',
+      `MÄNGEL (${r.defects.length}):`,
       ...r.defects.map(
         (d, i) =>
           `${i + 1}. [${d.severity.toUpperCase()}] ${d.title}${d.area ? ` (${d.area})` : ''}` +
-          `${d.estimated_cost_eur ? ` - ${fmtCost(d.estimated_cost_eur)}` : ''}\n   ${d.description}`
-      )
-    ].filter(Boolean);
+          `${d.estimated_cost_eur ? ` - ${fmtCost(d.estimated_cost_eur)}` : ''}` +
+          `${d.affects_roadworthiness ? ' [TÜV]' : ''}\n   ${d.description}` +
+          `${d.quote ? `\n   Beleg: "${d.quote}"${d.source_page ? ` (Seite ${d.source_page})` : ''}` : ''}`
+      ),
+      r.tires?.length
+        ? `\nREIFEN:\n${r.tires.map((t) => `  ${t.position}: ${t.dimension || '?'}, ${t.tread_mm ?? '?'} mm${t.note ? ` - ${t.note}` : ''}`).join('\n')}`
+        : '',
+      c ? `\nGrundlage: ${c.pagesRead} von ${c.pages} Seiten aus ${c.documents.length} Dokument(en).` : '',
+      'Einschätzung allein auf Basis der verlinkten Dokumente - ersetzt keine Besichtigung.'
+    ].filter((x) => x !== '' && x !== undefined && x !== null);
+
     navigator.clipboard.writeText(lines.join('\n')).then(() => {
       btn.textContent = 'Kopiert';
-      setTimeout(() => (btn.textContent = 'Kopieren'), 1500);
+      setTimeout(() => (btn.textContent = 'Kopieren'), 1600);
     });
   }
 
   /* --------------------------------------------------------------- Render */
 
   const SEV_LABEL = { kritisch: 'Kritisch', mittel: 'Mittel', gering: 'Gering', hinweis: 'Hinweis' };
+
+  const VERDICT_META = {
+    kaufen: { label: 'Kaufen', short: 'Kaufen', tone: 'good', icon: 'thumb' },
+    kaufen_mit_vorbehalt: { label: 'Kaufen mit Vorbehalt', short: 'Vorbehalt', tone: 'ok', icon: 'thumb' },
+    nachverhandeln: { label: 'Nachverhandeln', short: 'Verhandeln', tone: 'warn', icon: 'tag' },
+    finger_weg: { label: 'Finger weg', short: 'Finger weg', tone: 'bad', icon: 'alert' },
+    unklar: { label: 'Unklar', short: 'Unklar', tone: 'muted', icon: 'question' }
+  };
+
+  const CATEGORY_LABEL = {
+    karosserie: 'Karosserie', lack: 'Lack', glas: 'Glas', reifen: 'Reifen', raeder: 'Räder',
+    innenraum: 'Innenraum', technik: 'Technik', motor: 'Motor', getriebe: 'Getriebe',
+    fahrwerk: 'Fahrwerk', bremsen: 'Bremsen', elektrik: 'Elektrik',
+    ausstattung: 'Ausstattung', dokumente: 'Dokumente', sonstiges: 'Sonstiges'
+  };
 
   function render() {
     if (!ui) return;
@@ -408,6 +518,17 @@
     root.classList.toggle('collapsed', Boolean(state.collapsed));
     root.innerHTML = header() + (state.collapsed ? '' : body() + footer());
     attachDrag();
+    animateScore();
+  }
+
+  /** Score-Ring erst nach dem Einfügen animieren, damit der Übergang läuft. */
+  function animateScore() {
+    const ring = ui?.root.querySelector('.vms-ring-value');
+    if (!ring) return;
+    const target = Number(ring.dataset.offset);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      ring.style.strokeDashoffset = String(target);
+    }));
   }
 
   function header() {
@@ -416,16 +537,28 @@
     const total = r?.defects?.length || 0;
     let badge = '';
     if (state.status === 'done') {
-      badge = total
-        ? `<span class="vms-badge ${crit ? 'crit' : 'warn'}">${total} Mängel</span>`
-        : '<span class="vms-badge ok">Keine Mängel</span>';
+      const v = r?.verdict?.recommendation;
+      const meta = VERDICT_META[v];
+      badge = meta
+        ? `<span class="vms-badge ${meta.tone}" title="${meta.label}${
+            typeof r.verdict?.score === 'number' ? ` (Zustands-Score ${r.verdict.score}/100)` : ''
+          }">${
+            state.collapsed
+              ? `${meta.label}${typeof r.verdict?.score === 'number' ? ` · ${r.verdict.score}` : ''}`
+              : meta.short
+          }</span>`
+        : total
+          ? `<span class="vms-badge ${crit ? 'bad' : 'warn'}">${total} Mängel</span>`
+          : '<span class="vms-badge good">Keine Mängel</span>';
     } else if (state.status === 'busy') {
       badge = '<span class="vms-badge busy">Prüft…</span>';
     } else if (state.status === 'error') {
-      badge = '<span class="vms-badge crit">Fehler</span>';
+      badge = '<span class="vms-badge bad">Fehler</span>';
     }
 
-    const title = esc(state.result?.vehicle?.title || state.context.titel || 'Fahrzeug-Check');
+    // Der Seitentitel gehört zum Fahrzeug, das der Nutzer gerade ansieht - er hat Vorrang
+    // vor dem Titel aus dem Dokument.
+    const title = esc(state.context.titel || state.result?.vehicle?.title || 'Fahrzeug-Check');
     const sub = [state.context.vin, state.context.kilometer].filter(Boolean).map(esc).join(' · ');
 
     return `
@@ -456,33 +589,44 @@
         <div class="vms-docs">
           ${state.docs
             .map(
-              (d) => `<div class="vms-doc"><span class="vms-dot ${d.kind}"></span>
+              (d, i) => `<div class="vms-doc" style="--i:${i}"><span class="vms-dot ${d.kind}"></span>
                 <span class="vms-doc-label">${esc(d.label)}</span>
                 <button class="vms-link" data-act="open-doc" data-url="${esc(d.url)}">öffnen</button></div>`
             )
             .join('')}
         </div>
-        <button class="vms-primary" data-act="run">Mängel prüfen</button>
+        <button class="vms-primary" data-act="run">${searchIcon()}<span>Mängel prüfen</span></button>
       </div>`;
   }
 
   function busyBody() {
     const steps = state.steps
       .map(
-        (s) =>
-          `<li class="${s.done ? 'done' : 'active'}"><span class="vms-step-icon">${s.done ? checkIcon() : '<span class="vms-spin"></span>'}</span>${esc(s.label)}</li>`
+        (s, i) => `<li class="${s.done ? 'done' : 'active'}" style="--i:${i}">
+             <span class="vms-step-icon">${s.done ? checkIcon() : '<span class="vms-spin"></span>'}</span>
+             <span class="vms-step-label">${esc(s.label)}</span>
+             ${s.hint ? `<span class="vms-step-hint">${esc(s.hint)}</span>` : ''}
+           </li>`
       )
       .join('');
-    return `<div class="vms-body"><div class="vms-progress"><div class="vms-progress-bar"></div></div><ul class="vms-steps">${steps}</ul></div>`;
+    const pct = state.progressPct;
+    return `<div class="vms-body">
+      <div class="vms-progress">
+        <div class="vms-progress-bar ${pct === null ? 'indeterminate' : ''}" ${pct !== null ? `style="width:${pct}%"` : ''}></div>
+      </div>
+      <ul class="vms-steps">${steps}</ul>
+    </div>`;
   }
 
   function errorBody() {
     const noKey = state.error?.code === 'NO_API_KEY';
     return `
       <div class="vms-body">
-        <div class="vms-error">${esc(state.error?.message || 'Unbekannter Fehler')}</div>
+        <div class="vms-error">${alertIcon()}<span>${esc(state.error?.message || 'Unbekannter Fehler')}</span></div>
         <div class="vms-row">
-          ${noKey ? '<button class="vms-primary" data-act="options">API-Key eintragen</button>' : '<button class="vms-primary" data-act="rerun">Erneut versuchen</button>'}
+          ${noKey
+            ? '<button class="vms-primary" data-act="options"><span>API-Key eintragen</span></button>'
+            : '<button class="vms-primary" data-act="rerun"><span>Erneut versuchen</span></button>'}
           ${noKey ? '' : '<button class="vms-ghost" data-act="options">Einstellungen</button>'}
         </div>
       </div>`;
@@ -490,11 +634,14 @@
 
   function resultBody() {
     const r = state.result;
+    const v = r.verdict || {};
+
     if (!r.report_found && !r.defects.length) {
       return `<div class="vms-body">
+        ${verdictBlock(v, r)}
         <div class="vms-empty">${checkBig()}<div><strong>Keine Mängel dokumentiert</strong>
         <p>${esc(r.summary || 'Im PDF stehen keine Zustands- oder Mängelangaben.')}</p></div></div>
-        <div class="vms-row"><button class="vms-ghost" data-act="rerun">Neu analysieren</button></div>
+        ${coverageBlock()}
       </div>`;
     }
 
@@ -510,45 +657,134 @@
       .join('');
 
     const visible = r.defects.filter((d) => state.filter === 'alle' || d.severity === state.filter);
-    const cost = fmtCost(r.total_estimated_repair_cost_eur);
 
     return `
       <div class="vms-body">
-        <div class="vms-summary">
-          <span class="vms-cond ${condClass(r.overall_condition)}">${esc(r.overall_condition)}</span>
-          ${cost ? `<span class="vms-cost">Reparatur lt. Dokument: <b>${esc(cost)}</b></span>` : ''}
-          ${r.confidence !== null ? `<span class="vms-conf" title="Sicherheit der Auswertung">${Math.round((r.confidence || 0) * 100)}%</span>` : ''}
-        </div>
+        ${verdictBlock(v, r)}
+        ${listBlock(v.deal_breakers, 'bad', alertIcon(), 'Ausschlusskriterien')}
+        ${listBlock(v.before_first_drive, 'warn', wrenchIcon(), 'Vor der ersten Fahrt')}
         ${r.summary ? `<p class="vms-lead">${esc(r.summary)}</p>` : ''}
-        <div class="vms-chips">${chips}</div>
-        <div class="vms-list">${visible.map(defectCard).join('')}</div>
+        <div class="vms-toolbar">
+          <div class="vms-chips">${chips}</div>
+          <button class="vms-ghost sm" data-act="expand-all">${state.expandAll ? 'Zuklappen' : 'Alle Details'}</button>
+        </div>
+        <div class="vms-list">${visible.map((d, i) => defectCard(d, i)).join('')}</div>
+        ${negotiationBlock(v)}
         ${tiresBlock(r)}
         ${r.missing_info?.length ? `<div class="vms-missing"><strong>Nicht im Dokument:</strong> ${esc(r.missing_info.join(', '))}</div>` : ''}
+        ${coverageBlock()}
       </div>`;
   }
 
-  function defectCard(d) {
-    const cost = fmtCost(d.estimated_cost_eur);
+  function verdictBlock(v, r) {
+    const meta = VERDICT_META[v.recommendation] || VERDICT_META.unklar;
+    const cond = r.overall_condition && r.overall_condition !== 'unbekannt'
+      ? `<span class="vms-cond ${condClass(r.overall_condition)}">${esc(r.overall_condition)}</span>`
+      : '';
+    const budget = budgetText(v, r);
+
     return `
-      <article class="vms-defect ${d.severity}">
-        <button class="vms-defect-head" data-act="toggle-defect">
+      <section class="vms-verdict ${meta.tone}">
+        <div class="vms-verdict-head">
+          ${scoreRing(v.score, meta.tone)}
+          <div class="vms-verdict-main">
+            <div class="vms-verdict-label">${verdictIcon(meta.icon)}<span>${meta.label}</span></div>
+            ${v.headline ? `<p class="vms-verdict-line">${esc(v.headline)}</p>` : ''}
+          </div>
+        </div>
+        ${v.reasons?.length
+          ? `<ul class="vms-reasons">${v.reasons.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>`
+          : ''}
+        ${v.price_assessment ? `<p class="vms-price">${tagIcon()}<span>${esc(v.price_assessment)}</span></p>` : ''}
+        <div class="vms-verdict-foot">
+          ${cond}
+          ${budget ? `<span class="vms-budget">${budget}</span>` : ''}
+          ${r.confidence !== null ? `<span class="vms-conf" title="Sicherheit der Auswertung">Sicherheit ${Math.round((r.confidence || 0) * 100)} %</span>` : ''}
+        </div>
+      </section>`;
+  }
+
+  function budgetText(v, r) {
+    const min = v.repair_budget_min_eur ?? r.total_estimated_repair_cost_eur;
+    const max = v.repair_budget_max_eur;
+    if (typeof min !== 'number') return '';
+    if (typeof max === 'number' && max > min) {
+      return `Reparatur lt. Dokument <b>${esc(fmtCost(min))} – ${esc(fmtCost(max))}</b>`;
+    }
+    return `Reparatur lt. Dokument <b>${esc(fmtCost(min))}</b>`;
+  }
+
+  function scoreRing(score, tone) {
+    if (typeof score !== 'number') {
+      return `<div class="vms-ring empty ${tone}">${questionIcon()}</div>`;
+    }
+    const R = 22;
+    const circumference = 2 * Math.PI * R;
+    const offset = circumference * (1 - Math.min(100, Math.max(0, score)) / 100);
+    return `
+      <div class="vms-ring ${tone}">
+        <svg viewBox="0 0 52 52" width="52" height="52" aria-hidden="true">
+          <circle class="vms-ring-track" cx="26" cy="26" r="${R}" />
+          <circle class="vms-ring-value" cx="26" cy="26" r="${R}"
+            style="stroke-dasharray:${circumference.toFixed(1)};stroke-dashoffset:${circumference.toFixed(1)}"
+            data-offset="${offset.toFixed(1)}" />
+        </svg>
+        <span class="vms-ring-num">${score}</span>
+      </div>`;
+  }
+
+  function listBlock(items, tone, icon, title) {
+    if (!items?.length) return '';
+    return `
+      <section class="vms-callout ${tone}">
+        <div class="vms-callout-head">${icon}<strong>${title}</strong></div>
+        <ul>${items.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>
+      </section>`;
+  }
+
+  function negotiationBlock(v) {
+    if (!v.negotiation_points?.length) return '';
+    const sum = v.negotiation_points.reduce((a, p) => a + (p.amount_eur || 0), 0);
+    return `
+      <details class="vms-fold" ${state.expandAll ? 'open' : ''}>
+        <summary>${tagIcon()}<span>Verhandlungshebel (${v.negotiation_points.length})</span>
+          ${sum ? `<span class="vms-fold-sum">${esc(fmtCost(sum))}</span>` : ''}</summary>
+        <ul class="vms-negotiation">
+          ${v.negotiation_points
+            .map(
+              (p) =>
+                `<li><span>${esc(p.point)}</span>${p.amount_eur ? `<b>${esc(fmtCost(p.amount_eur))}</b>` : ''}</li>`
+            )
+            .join('')}
+        </ul>
+      </details>`;
+  }
+
+  function defectCard(d, index) {
+    const cost = fmtCost(d.estimated_cost_eur);
+    const open = state.expandAll || state.openDefects.has(defectId(d));
+    return `
+      <article class="vms-defect ${d.severity} ${open ? 'open' : ''}" style="--i:${index}" data-id="${esc(defectId(d))}">
+        <button class="vms-defect-head" data-act="toggle-defect" aria-expanded="${open}">
           <span class="vms-sev" title="${SEV_LABEL[d.severity]}"></span>
           <span class="vms-defect-title">${esc(d.title)}</span>
           ${d.affects_roadworthiness ? '<span class="vms-tag tuv" title="HU/TÜV-relevant">TÜV</span>' : ''}
           ${cost ? `<span class="vms-tag cost">${esc(cost)}</span>` : ''}
           <span class="vms-caret">${chevronDown()}</span>
         </button>
-        <div class="vms-defect-body">
+        <div class="vms-defect-body"><div class="vms-defect-inner"><div class="vms-defect-pad">
           <p>${esc(d.description)}</p>
           <div class="vms-meta">
             ${d.area ? `<span>${esc(d.area)}</span>` : ''}
-            <span class="vms-cat">${esc(d.category)}</span>
+            <span class="vms-cat">${esc(CATEGORY_LABEL[d.category] || d.category)}</span>
             ${d.source_page ? `<span>Seite ${d.source_page}</span>` : ''}
           </div>
-          ${d.quote ? `<blockquote>„${esc(d.quote)}“</blockquote>` : ''}
-        </div>
+          ${d.quote ? `<blockquote>${esc(d.quote)}</blockquote>` : ''}
+        </div></div></div>
       </article>`;
   }
+
+  const defectId = (d) => `${d.title}|${d.area}`.toLowerCase().replace(/\s+/g, '-').slice(0, 80);
 
   function tiresBlock(r) {
     if (!r.tires?.length) return '';
@@ -560,8 +796,26 @@
            <td>${esc(t.note || '')}</td></tr>`
       )
       .join('');
-    return `<details class="vms-tires"><summary>Reifen (${r.tires.length})</summary>
-      <table><thead><tr><th>Pos.</th><th>Größe</th><th>Profil</th><th>Notiz</th></tr></thead><tbody>${rows}</tbody></table></details>`;
+    return `<details class="vms-fold" ${state.expandAll ? 'open' : ''}>
+      <summary>${tireIcon()}<span>Reifen (${r.tires.length})</span></summary>
+      <table class="vms-tires"><thead><tr><th>Pos.</th><th>Größe</th><th>Profil</th><th>Notiz</th></tr></thead>
+      <tbody>${rows}</tbody></table></details>`;
+  }
+
+  function coverageBlock() {
+    const c = state.result?.meta?.coverage;
+    if (!c) return '';
+    const docs = c.documents || [];
+    const scanned = docs.filter((d) => d.scanned).length;
+    const imagePages = docs.reduce((a, d) => a + (d.imagePages?.length || 0), 0);
+    const bits = [`${c.pagesRead} von ${c.pages} Seiten gelesen`];
+    if (docs.length > 1) bits.push(`${docs.length} Dokumente`);
+    if (scanned) bits.push(`${scanned} Scan${scanned > 1 ? 's' : ''} per Bilderkennung`);
+    else if (imagePages) bits.push(`${imagePages} Bildseite${imagePages > 1 ? 'n' : ''} zusätzlich erkannt`);
+    if (state.result?.meta?.chunks > 1) bits.push(`in ${state.result.meta.chunks} Teilen ausgewertet`);
+
+    return `<div class="vms-coverage ${c.complete ? 'ok' : 'partial'}">
+      ${c.complete ? checkIcon() : alertIcon()}<span>${esc(bits.join(' · '))}</span></div>`;
   }
 
   function condClass(c) {
@@ -577,15 +831,17 @@
       else {
         if (typeof meta.usage?.cost === 'number') bits.push(`$${meta.usage.cost.toFixed(4)}`);
         if (meta.durationMs) bits.push(`${(meta.durationMs / 1000).toFixed(1)}s`);
+        if (meta.calls > 1) bits.push(`${meta.calls} Aufrufe`);
       }
       if (meta.mode === 'vision') bits.push('Scan-Modus');
+      if (meta.mode === 'hybrid') bits.push('Text + Bild');
     }
     return `
       <footer class="vms-foot">
-        <span class="vms-meta-line">${bits.join(' · ')}</span>
+        <span class="vms-meta-line" title="${bits.join(' · ')}">${bits.join(' · ')}</span>
         <span class="vms-foot-actions">
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="copy">Kopieren</button>' : ''}
-          ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="rerun" title="Cache umgehen">Neu</button>' : ''}
+          ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="rerun" title="Cache umgehen und neu auswerten">Neu</button>' : ''}
           <button class="vms-ghost sm" data-act="options">Einstellungen</button>
         </span>
       </footer>`;
@@ -636,6 +892,22 @@
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
   const checkIcon = () =>
     '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+  const searchIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>';
+  const alertIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l9 16H3z"/><path d="M12 10v4"/><circle cx="12" cy="17.2" r=".9" fill="currentColor" stroke="none"/></svg>';
+  const wrenchIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3.5a5 5 0 0 0-6.3 6.3L3.6 15.4a2 2 0 1 0 2.8 2.8l5.6-5.6a5 5 0 0 0 6.3-6.3l-2.9 2.9-2.1-2.1z"/></svg>';
+  const tagIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9z"/><circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none"/></svg>';
+  const tireIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/></svg>';
+  const questionIcon = () =>
+    '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 9.2a2.9 2.9 0 1 1 3.9 2.7c-.8.3-1.1 1-1.1 1.8v.4"/><circle cx="12" cy="17.6" r="1" fill="currentColor" stroke="none"/></svg>';
+  const thumbIcon = () =>
+    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v10H4V10zM7 10l4-7a2 2 0 0 1 3 1.8V9h4.5a2 2 0 0 1 2 2.4l-1.3 6A2 2 0 0 1 17.2 19H7z"/></svg>';
+  const verdictIcon = (name) =>
+    ({ thumb: thumbIcon, tag: tagIcon, alert: alertIcon, question: questionIcon }[name] || questionIcon)();
   const checkBig = () =>
     '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>';
 

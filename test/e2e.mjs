@@ -48,8 +48,10 @@ const siteServer = http.createServer((req, res) => {
 });
 
 const MOCK = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'mock-response.json'), 'utf8'));
+const MOCK_DELAY_MS = Number(process.env.MOCK_DELAY_MS || 0);
 let apiCalls = 0;
 let lastRequest = null;
+let requests = [];
 const apiServer = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
@@ -57,11 +59,15 @@ const apiServer = http.createServer((req, res) => {
     apiCalls++;
     try {
       lastRequest = JSON.parse(body || '{}');
+      requests.push(lastRequest);
     } catch {
       lastRequest = null;
     }
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(MOCK));
+    const reply = () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(MOCK));
+    };
+    MOCK_DELAY_MS ? setTimeout(reply, MOCK_DELAY_MS) : reply();
   });
 });
 
@@ -99,11 +105,20 @@ await waitDone(page).catch(() => {});
 check('Ohne API-Key: Hinweis + Button', await evalRoot(page, `r.querySelector('.vms-primary')?.textContent.trim()`), 'API-Key eintragen');
 await page.close();
 
-const opt = await ctx.newPage();
-await opt.goto(`chrome-extension://${extId}/src/options/options.html`);
-await opt.evaluate((base) => chrome.storage.local.set({ apiKey: 'sk-or-test', apiBase: base, autoRun: true, cacheEnabled: true }),
-  `http://127.0.0.1:${API_PORT}/v1`);
-await opt.close();
+async function settings(patch) {
+  const p = await ctx.newPage();
+  await p.goto(`chrome-extension://${extId}/src/options/options.html`);
+  await p.evaluate((v) => chrome.storage.local.set(v), patch);
+  await p.close();
+}
+await settings({
+  apiKey: 'sk-or-test',
+  apiBase: `http://127.0.0.1:${API_PORT}/v1`,
+  autoRun: true,
+  cacheEnabled: true,
+  maxChars: 120000,
+  panelCollapsed: false
+});
 
 /* 2 – keine Fehlalarme auf Seiten ohne Fahrzeugbezug */
 for (const [file, expected] of [['blog.html', false], ['pricelist.html', false]]) {
@@ -130,9 +145,13 @@ check('Tabellenspalten bleiben erhalten', /Bremsen hinten {2,}Belaege/.test(Stri
 check('Structured Output angefordert', lastRequest?.response_format?.type, 'json_schema');
 check('Temperatur 0', lastRequest?.temperature, 0);
 
+check('Details sind zugeklappt unsichtbar', await evalRoot(page, `r.querySelector('.vms-defect .vms-defect-inner').getBoundingClientRect().height`), 0);
 await page.evaluate(`${ROOT}.querySelector('.vms-defect-head').click()`);
-await page.waitForTimeout(250);
+await page.waitForTimeout(450);
 check('Mangel aufklappbar mit Beleg-Zitat', await evalRoot(page, `Boolean(r.querySelector('.vms-defect.open blockquote'))`), true);
+check('Aufgeklappt hat der Inhalt Höhe', await evalRoot(page, `r.querySelector('.vms-defect.open .vms-defect-inner').getBoundingClientRect().height > 40`), true);
+check('Kopfzeile nutzt Kurzlabel', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), 'Verhandeln');
+check('Fahrzeugtitel kommt von der Seite', await evalRoot(page, `r.querySelector('.vms-title')?.title`), 'Volkswagen Touran 2.0 TDI SCR DSG Automatic Diesel');
 
 await page.evaluate(`${ROOT}.querySelector('.vms-chip.kritisch').click()`);
 await page.waitForTimeout(200);
@@ -151,7 +170,7 @@ await waitDone(page);
 check('Zweiter Aufruf ohne API-Kosten', apiCalls - beforeCache, 0);
 // Das Panel merkt sich den eingeklappten Zustand aus Schritt 3 - hier wieder aufklappen.
 check('Eingeklappter Zustand bleibt seitenübergreifend', await evalRoot(page, `r.classList.contains('collapsed')`), true);
-check('Badge auch eingeklappt sichtbar', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), '6 Mängel');
+check('Eingeklappt steht das volle Urteil im Kopf', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), 'Nachverhandeln · 58');
 await page.evaluate(`${ROOT}.querySelector('[data-act="collapse"]').click()`);
 await page.waitForTimeout(250);
 check('Footer weist Cache aus', await evalRoot(page, `r.querySelector('.vms-meta-line').textContent.includes('Cache')`), true);
@@ -166,6 +185,113 @@ check('Scan-PDF wird analysiert', await evalRoot(page, `r.dataset.status`), 'don
 check('Bilder statt Text im Request', (lastRequest?.messages?.[1]?.content || []).filter?.((p) => p.type === 'image_url').length, 1);
 check('Ein API-Aufruf für den Scan', apiCalls - beforeScan, 1);
 await page.close();
+
+/* 6 - Kaufempfehlung */
+const beforeVerdict = apiCalls;
+page = await ctx.newPage();
+await page.goto(site('vehicle.html'));
+await waitDone(page);
+check('Empfehlung im Kopf sichtbar', await evalRoot(page, `r.querySelector('.vms-badge')?.textContent.trim()`), 'Verhandeln');
+check('Empfehlungsblock vorhanden', await evalRoot(page, `Boolean(r.querySelector('.vms-verdict.warn'))`), true);
+check('Zustands-Score angezeigt', await evalRoot(page, `r.querySelector('.vms-ring-num')?.textContent.trim()`), '58');
+check('Score-Ring wird animiert', await evalRoot(page, `(() => { const c = r.querySelector('.vms-ring-value'); return Number(c.style.strokeDashoffset) > 0 && Number(c.style.strokeDashoffset) < Number(c.dataset.offset) * 3; })()`), true);
+check('Begründungen gelistet', await evalRoot(page, `r.querySelectorAll('.vms-reasons li').length`), 3);
+check('"Vor der ersten Fahrt" als Warnblock', await evalRoot(page, `r.querySelectorAll('.vms-callout.warn li').length`), 2);
+check('Keine Ausschlusskriterien -> kein roter Block', await evalRoot(page, `Boolean(r.querySelector('.vms-callout.bad'))`), false);
+check('Verhandlungshebel nach Betrag sortiert', await evalRoot(page, `[...r.querySelectorAll('.vms-negotiation li b')].map(b => b.textContent.replace(/\\s/g, ' ').trim())`), ['690 €', '480 €', '310 €']);
+check('Reparaturspanne im Empfehlungsblock', await evalRoot(page, `r.querySelector('.vms-budget')?.textContent.replace(/\\s+/g, ' ').trim()`), 'Reparatur lt. Dokument 1.830 € – 2.400 €');
+check('Leseabdeckung ausgewiesen', await evalRoot(page, `r.querySelector('.vms-coverage')?.textContent.trim()`), '1 von 1 Seiten gelesen');
+check('Empfehlung kommt aus dem Cache, ohne neuen Aufruf', apiCalls - beforeVerdict, 0);
+
+await page.evaluate(`${ROOT}.querySelector('[data-act="expand-all"]').click()`);
+await page.waitForTimeout(300);
+check('"Alle Details" klappt alles auf', await evalRoot(page, `[...r.querySelectorAll('.vms-defect')].every(d => d.classList.contains('open')) && [...r.querySelectorAll('.vms-fold')].every(f => f.open)`), true);
+await page.close();
+
+/* 7 - langes Dokument wird vollständig in Teilen ausgewertet */
+await settings({ maxChars: 20000 });
+requests = [];
+const beforeChunks = apiCalls;
+page = await ctx.newPage();
+await page.goto(site('long.html'));
+await waitDone(page, 90000).catch(() => console.log('      (Timeout im Chunk-Lauf)'));
+
+const chunkReqs = requests.filter((r) => String(r.messages?.[1]?.content).includes('Teil '));
+const synthesis = requests.filter((r) => String(r.messages?.[1]?.content).includes('Gefundene Mängel'));
+check('Dokument wurde in mehrere Teile zerlegt', chunkReqs.length > 1, true);
+check('Abschließende Gesamtbewertung', synthesis.length, 1);
+check('Aufrufe = Teile + Gesamtbewertung', apiCalls - beforeChunks, chunkReqs.length + 1);
+
+const sentText = chunkReqs.map((r) => r.messages[1].content).join('\n');
+const missingPages = Array.from({ length: 30 }, (_, i) => i + 1).filter(
+  (n) => !sentText.includes(`MARKER-SEITE-${String(n).padStart(2, '0')}`)
+);
+check('Alle 30 Seiten an die KI geschickt', missingPages, []);
+check('Befund auf Seite 17 enthalten', sentText.includes('Bremsscheiben stark eingelaufen'), true);
+check('Befund auf Seite 29 enthalten', sentText.includes('Rost am Laengstraeger'), true);
+check('Preis der Seite geht in den Prompt', /preis: 18\.900 EUR/i.test(sentText), true);
+check('FIN der Seite geht in den Prompt', sentText.includes('WDB9066331S123456'), true);
+check('Panel meldet vollständige Abdeckung', await evalRoot(page, `r.querySelector('.vms-coverage.ok')?.textContent.replace(/\\s+/g, ' ').trim()`), '30 von 30 Seiten gelesen · in 3 Teilen ausgewertet');
+await page.close();
+await settings({ maxChars: 120000 });
+
+/* 8 - Hybrid: Textseiten + einzelne Bildseite */
+requests = [];
+const beforeHybrid = apiCalls;
+page = await ctx.newPage();
+await page.goto(site('hybrid.html'));
+await waitDone(page, 60000).catch(() => {});
+const hybridReq = requests.at(-1);
+const parts = hybridReq?.messages?.[1]?.content;
+check('Hybrid: Text UND Bild im selben Aufruf',
+  Array.isArray(parts) && parts.some((p) => p.type === 'text' && p.text.includes('Position 1.0')) && parts.some((p) => p.type === 'image_url'), true);
+check('Hybrid: nur die textlose Seite als Bild', Array.isArray(parts) ? parts.filter((p) => p.type === 'image_url').length : 0, 1);
+check('Hybrid: ein Aufruf', apiCalls - beforeHybrid, 1);
+check('Hybrid im Footer ausgewiesen', await evalRoot(page, `r.querySelector('.vms-meta-line')?.textContent.includes('Text + Bild')`), true);
+await page.close();
+
+// Zweiter Besuch derselben Hybrid-Seite darf nichts kosten und muss im selben Modus bleiben
+const beforeHybrid2 = apiCalls;
+page = await ctx.newPage();
+await page.goto(site('hybrid.html'));
+await waitDone(page, 60000).catch(() => {});
+check('Hybrid: zweiter Besuch ohne neuen Aufruf', apiCalls - beforeHybrid2, 0);
+check('Hybrid: Modus bleibt stabil', await evalRoot(page, `r.querySelector('.vms-meta-line')?.textContent.includes('Text + Bild')`), true);
+await page.close();
+
+// Dasselbe für den reinen Scan
+const beforeScan2 = apiCalls;
+page = await ctx.newPage();
+await page.goto(site('scanned.html'));
+await waitDone(page, 60000).catch(() => {});
+check('Scan: zweiter Besuch ohne neuen Aufruf', apiCalls - beforeScan2, 0);
+await page.close();
+
+/* 9 - Optionsseite und Barrierefreiheit */
+const opts = await ctx.newPage();
+await opts.goto(`chrome-extension://${extId}/src/options/options.html`);
+await opts.waitForTimeout(400);
+check('Domainfelder nur im passenden Modus sichtbar',
+  await opts.evaluate(() => [
+    getComputedStyle(document.getElementById('allowField')).display,
+    getComputedStyle(document.getElementById('blockField')).display
+  ]), ['none', 'none']);
+await opts.selectOption('#domainMode', 'allowlist');
+await opts.waitForTimeout(200);
+check('Allowlist erscheint bei Umschaltung',
+  await opts.evaluate(() => getComputedStyle(document.getElementById('allowField')).display), 'block');
+await opts.close();
+
+const rm = await ctx.newPage();
+await rm.emulateMedia({ reducedMotion: 'reduce' });
+await rm.goto(site('vehicle.html'));
+await rm.waitForFunction(`${ROOT}?.dataset.status === 'done'`, null, { timeout: 40000 });
+await rm.waitForTimeout(300);
+check('Reduzierte Bewegung wird respektiert',
+  await evalRoot(rm, `[getComputedStyle(r.querySelector('.vms-defect')).animationName,
+                      getComputedStyle(r.querySelector('.vms-ring-value')).transitionDuration]`),
+  ['none', '0s']);
+await rm.close();
 
 check('Keine Fehler im Service Worker', swErrors, []);
 

@@ -11,7 +11,7 @@ export const DEFAULTS = {
   autoRun: true,
   visionFallback: true,
   visionMaxPages: 6,
-  maxChars: 120000,
+  maxChars: 120000, // pro KI-Aufruf; laengere Dokumente werden in Teilen ausgewertet
   outputLanguage: 'de',
   panelPosition: null,
   panelCollapsed: false,
