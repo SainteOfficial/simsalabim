@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Fahrzeug-Mängel-Scanner",
-  "short_name": "Mängel-Scanner",
-  "version": "1.0.0",
-  "description": "Findet auf Fahrzeugseiten automatisch Fahrzeug-PDF und Zustandsbericht, liest sie aus und listet alle Mängel per KI (OpenRouter).",
+  "name": "Autosmaya",
+  "short_name": "Autosmaya",
+  "version": "1.1.0",
+  "description": "Liest Fahrzeug-PDF und Zustandsbericht automatisch aus, listet alle Mängel, rechnet die Kosten und gibt eine Kaufempfehlung.",
   "minimum_chrome_version": "116",
   "permissions": [
     "storage",
@@ -34,7 +34,7 @@
   ],
   "options_page": "src/options/options.html",
   "action": {
-    "default_title": "Fahrzeug-Mängel-Scanner",
+    "default_title": "Autosmaya – Fahrzeug prüfen",
     "default_popup": "src/popup/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -60,5 +60,19 @@
         "https://*/*"
       ]
     }
-  ]
+  ],
+  "commands": {
+    "toggle-panel": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Autosmaya-Panel ein-/ausblenden"
+    },
+    "analyze-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Aktuelle Seite jetzt prüfen"
+    }
+  }
 }

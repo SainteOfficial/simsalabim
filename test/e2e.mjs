@@ -267,7 +267,101 @@ await waitDone(page, 60000).catch(() => {});
 check('Scan: zweiter Besuch ohne neuen Aufruf', apiCalls - beforeScan2, 0);
 await page.close();
 
-/* 9 - Optionsseite und Barrierefreiheit */
+/* 9 - Berechnet-Block, Sichtbarkeit und Bedienkomfort */
+await settings({ cacheEnabled: false });
+page = await ctx.newPage();
+await page.goto(site('long.html'));       // Seite mit Preis 18.900 EUR
+await waitDone(page, 60000);
+await page.waitForTimeout(400);
+
+const calc = await evalRoot(page, `[...r.querySelectorAll('.vms-calc-row')].map(x => [
+  x.querySelector('.vms-calc-label').firstChild.textContent.trim(),
+  x.querySelector('.vms-calc-value').textContent.replace(/\\s/g, ' ').trim()
+])`);
+check('Berechnet: belegte Reparatursumme', calc.find((r) => r[0] === 'Reparatur belegt')?.[1], '1.830 €');
+check('Berechnet: sicherheitsrelevanter Anteil', calc.find((r) => r[0] === 'davon sicherheitsrelevant')?.[1], '1.000 €');
+check('Berechnet: Positionen ohne Betrag', calc.find((r) => r[0] === 'Ohne Betrag im Dokument')?.[1], '2 Positionen');
+check('Berechnet: Angebotspreis von der Seite', calc.find((r) => r[0] === 'Angebotspreis')?.[1], '18.900 €');
+check('Berechnet: Effektivpreis = Preis + Reparatur', calc.find((r) => r[0] === 'Effektivpreis')?.[1], '20.730 €');
+check('Berechnet: Verhandlungsziel = Preis − Hebel', calc.find((r) => r[0] === 'Verhandlungsziel')?.[1], '17.420 €');
+
+check('Urteilsleiste erst beim Scrollen', await evalRoot(page, `getComputedStyle(r.querySelector('.vms-sticky')).opacity`), '0');
+await page.evaluate(`(() => { const r = ${ROOT}; r.querySelector('.vms-body').scrollTop = 430; })()`);
+await page.waitForTimeout(500);
+check('Urteilsleiste blendet ein', await evalRoot(page, `getComputedStyle(r.querySelector('.vms-sticky')).opacity`), '1');
+check('Urteilsleiste zeigt Urteil und Zahl', await evalRoot(page, `[r.querySelector('.vms-sticky-label').textContent.trim(), r.querySelector('.vms-sticky-score').textContent.trim()]`), ['Nachverhandeln', '58']);
+
+await page.evaluate(`(() => { const i = ${ROOT}.querySelector('.vms-search'); i.value = 'reifen'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+await page.waitForTimeout(300);
+check('Suche filtert die Liste', await evalRoot(page, `[...r.querySelectorAll('.vms-defect')].filter(d => !d.hidden).length`), 1);
+check('Trefferzahl wird angezeigt', await evalRoot(page, `r.querySelector('.vms-hits').textContent.trim()`), '1 von 6 Mängeln');
+await page.evaluate(`(() => { const i = ${ROOT}.querySelector('.vms-search'); i.value = 'zzz'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+await page.waitForTimeout(250);
+check('Leere Suche zeigt Hinweis', await evalRoot(page, `!r.querySelector('.vms-nohits').hidden`), true);
+await page.evaluate(`(() => { const i = ${ROOT}.querySelector('.vms-search'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+await page.waitForTimeout(250);
+
+await page.selectOption('#vms-host >> internal:control=enter-frame >> .vms-sort', 'kosten').catch(async () => {
+  await page.evaluate(`(() => { const s = ${ROOT}.querySelector('.vms-sort'); s.value = 'kosten'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+});
+await page.waitForTimeout(400);
+check('Sortierung nach Kosten', await evalRoot(page, `[...r.querySelectorAll('.vms-defect .vms-tag.cost')].map(t => t.textContent.replace(/\\s/g, ' ').trim())`), ['690 €', '480 €', '350 €', '310 €']);
+
+check('Seitensprung verlinkt das PDF', await evalRoot(page, `r.querySelector('.vms-page')?.dataset.page`), '1');
+
+await page.evaluate(`${ROOT}.querySelector('[data-act="theme"]').click()`);
+await page.waitForTimeout(250);
+check('Theme-Schalter: hell erzwungen', await evalRoot(page, `r.dataset.theme`), 'light');
+await page.evaluate(`${ROOT}.querySelector('[data-act="theme"]').click()`);
+await page.waitForTimeout(250);
+check('Theme-Schalter: dunkel erzwungen', await evalRoot(page, `[r.dataset.theme, getComputedStyle(r).backgroundColor]`), ['dark', 'rgb(22, 24, 29)']);
+await page.evaluate(`${ROOT}.querySelector('[data-act="theme"]').click()`);
+
+check('Erkannte Links sind auf der Seite markiert',
+  await page.evaluate(`(() => { const a = document.querySelector('[data-autosmaya]'); return [a?.textContent.trim(), a?.getAttribute('data-autosmaya')]; })()`),
+  ['Zustandsbericht', 'condition']);
+
+// Toolbar-Symbol trägt das Urteil
+const probe = await ctx.newPage();
+await probe.goto(`chrome-extension://${extId}/src/options/options.html`);
+const badge = await probe.evaluate(async () => {
+  const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:8899/long.html' });
+  const id = tabs[0]?.id;
+  return { text: await chrome.action.getBadgeText({ tabId: id }), title: await chrome.action.getTitle({ tabId: id }) };
+});
+check('Toolbar-Symbol zeigt kritische Mängel', badge.text, '3');
+check('Toolbar-Titel nennt das Urteil', badge.title, 'Autosmaya: Nachverhandeln · 6 Mängel');
+const probe0 = probe;
+
+// Zustand für das Popup
+const popupState = await probe0.evaluate(async () => {
+  const tabs = await chrome.tabs.query({ url: 'http://127.0.0.1:8899/long.html' });
+  return chrome.tabs.sendMessage(tabs[0].id, { type: 'GET_STATE' });
+});
+check('Popup bekommt Urteil und Leseabdeckung',
+  [popupState.status, popupState.verdict.recommendation, popupState.defects, popupState.pages],
+  ['done', 'nachverhandeln', 6, 30]);
+
+check('Panel schließt zur Rückhol-Pille', await (async () => {
+  await page.evaluate(`${ROOT}.querySelector('[data-act="close"]').click()`);
+  await page.waitForTimeout(300);
+  return page.evaluate(`(() => {
+    const p = document.getElementById('vms-host').shadowRoot.querySelector('.vms-pill-count');
+    return [Boolean(p), p?.textContent];
+  })()`);
+})(), [true, '3']);
+await page.evaluate(`document.getElementById('vms-host').shadowRoot.querySelector('[data-act="restore"]').click()`);
+await page.waitForTimeout(400);
+check('Rückhol-Pille öffnet das Panel wieder', await evalRoot(page, `Boolean(r.querySelector('.vms-verdict'))`), true);
+
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+check('Esc klappt das Panel ein', await evalRoot(page, `r.classList.contains('collapsed')`), true);
+await probe0.close();
+await page.close();
+await settings({ cacheEnabled: true, panelCollapsed: false, panelTheme: 'auto' });
+
+/* 10 - Optionsseite und Barrierefreiheit */
 const opts = await ctx.newPage();
 await opts.goto(`chrome-extension://${extId}/src/options/options.html`);
 await opts.waitForTimeout(400);

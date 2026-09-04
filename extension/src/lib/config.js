@@ -15,6 +15,9 @@ export const DEFAULTS = {
   outputLanguage: 'de',
   panelPosition: null,
   panelCollapsed: false,
+  panelTheme: 'auto',
+  panelSize: null,
+  markLinks: true,
   domainMode: 'all', // 'all' | 'allowlist' | 'blocklist'
   allowlist: [],
   blocklist: [],

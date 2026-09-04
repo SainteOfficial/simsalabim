@@ -46,7 +46,7 @@
 .vms-root.collapsed { max-height: none; }
 
 @media (prefers-color-scheme: dark) {
-  .vms-root {
+  .vms-root:not([data-theme='light']) {
     --bg: #16181d;
     --bg-soft: #1e2128;
     --border: #2b2f38;
@@ -61,6 +61,21 @@
     --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
   }
 }
+
+.vms-root[data-theme='dark'] {
+    --bg: #16181d;
+    --bg-soft: #1e2128;
+    --border: #2b2f38;
+    --text: #eceef2;
+    --text-dim: #99a1af;
+    --accent: #60a5fa;
+    --crit: #f87171;
+    --warn: #fbbf24;
+    --low: #38bdf8;
+    --info: #9ca3af;
+    --ok: #4ade80;
+    --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  }
 
 /* ------------------------------------------------------------------ Head */
 
@@ -425,7 +440,8 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.vms-foot-actions { display: flex; gap: 5px; flex: none; }
+.vms-foot-actions { display: flex; align-items: center; gap: 5px; flex: none; }
+.vms-icon.sm { width: 22px; height: 22px; }
 
 /* ------------------------------------------------------------- Empfehlung */
 
@@ -691,4 +707,252 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
     transition: none !important;
   }
   .vms-progress-bar.indeterminate { animation: none; width: 100%; opacity: 0.5; }
+}
+
+/* ------------------------------------------------------------- Berechnet */
+
+.vms-calc {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 10px 12px 11px;
+  margin-bottom: 11px;
+  background: var(--bg-soft);
+  animation: vms-rise 300ms var(--ease) both;
+  animation-delay: 40ms;
+}
+.vms-calc-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.vms-calc-head strong { font-size: 12px; letter-spacing: 0.02em; text-transform: uppercase; }
+.vms-calc-head svg { color: var(--accent); }
+.vms-calc-note { margin-left: auto; font-size: 10px; color: var(--text-dim); }
+
+.vms-calc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3.5px 0;
+  font-size: 12.5px;
+}
+.vms-calc-label { flex: 1; color: var(--text-dim); }
+.vms-calc-label small { display: block; font-size: 10.5px; opacity: 0.85; margin-top: 1px; }
+.vms-calc-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.vms-calc-row.urgent .vms-calc-value { color: var(--crit); }
+.vms-calc-row.open .vms-calc-value { color: var(--warn); }
+.vms-calc-row.strong { font-size: 14px; }
+.vms-calc-row.strong .vms-calc-label { color: var(--text); font-weight: 600; }
+.vms-calc-row.strong .vms-calc-value { font-weight: 750; }
+.vms-calc-row.target .vms-calc-value { color: var(--ok); }
+.vms-calc-sep { height: 1px; background: var(--border); margin: 7px 0; }
+
+/* ------------------------------------------------------- Urteilsleiste */
+
+.vms-sticky {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  border-bottom: 1px solid transparent;
+  background: var(--bg-soft);
+  font-size: 11.5px;
+  transition: max-height 220ms var(--ease), opacity 180ms var(--ease), padding 220ms var(--ease);
+  flex: none;
+}
+.vms-root.scrolled .vms-sticky {
+  max-height: 38px;
+  opacity: 1;
+  padding: 8px 11px;
+  border-bottom-color: var(--border);
+}
+.vms-sticky.good { --tone: var(--ok); }
+.vms-sticky.ok { --tone: var(--accent); }
+.vms-sticky.warn { --tone: var(--warn); }
+.vms-sticky.bad { --tone: var(--crit); }
+.vms-sticky.muted { --tone: var(--text-dim); }
+.vms-sticky-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--tone); flex: none; }
+.vms-sticky-label { font-weight: 650; color: var(--tone); }
+.vms-sticky-score {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 15%, transparent);
+  color: var(--tone);
+}
+.vms-sticky-counts { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vms-sticky-top {
+  all: unset;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  flex: none;
+}
+.vms-sticky-top:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+
+/* ------------------------------------------------------- Suche & Sortierung */
+
+.vms-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-soft);
+  transition: border-color 140ms, box-shadow 140ms;
+}
+.vms-searchbar:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.vms-search-icon { display: grid; place-items: center; color: var(--text-dim); flex: none; }
+.vms-search {
+  all: unset;
+  flex: 1;
+  padding: 7px 0;
+  font-size: 12.5px;
+  color: var(--text);
+  min-width: 0;
+}
+.vms-search::placeholder { color: var(--text-dim); }
+.vms-search::-webkit-search-cancel-button { cursor: pointer; }
+.vms-sort {
+  all: unset;
+  padding: 5px 4px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-left: 1px solid var(--border);
+  padding-left: 8px;
+  flex: none;
+}
+.vms-sort option { background: var(--bg); color: var(--text); }
+.vms-hits { font-size: 11px; color: var(--text-dim); margin: -3px 0 7px 2px; }
+.vms-nohits {
+  padding: 14px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg-soft);
+  border-radius: 9px;
+  margin-top: 8px;
+}
+
+/* Sprung in die PDF-Seite */
+.vms-page {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border-radius: 5px;
+  padding: 2px 6px;
+  font-size: 11px;
+  transition: background 140ms;
+}
+.vms-page:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* --------------------------------------------------------- Größe ändern */
+
+.vms-resize {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nesw-resize;
+  opacity: 0;
+  transition: opacity 160ms;
+}
+.vms-resize::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  border-left: 2px solid var(--text-dim);
+  border-bottom: 2px solid var(--text-dim);
+  border-radius: 0 0 0 3px;
+}
+.vms-root:hover .vms-resize { opacity: 0.55; }
+.vms-resize:hover { opacity: 1 !important; }
+.vms-root.resizing { user-select: none; }
+.vms-root.resizing .vms-body { pointer-events: none; }
+
+/* ------------------------------------------------------------ Rückholer */
+
+.vms-pill {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  animation: vms-in 220ms var(--ease);
+}
+.vms-pill-btn {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 13px 8px 11px;
+  border-radius: 999px;
+  --tone: #14161a;
+  background: #fff;
+  color: var(--tone);
+  border: 1px solid #e4e6ea;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+  font: 600 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  cursor: pointer;
+  transition: transform 140ms var(--ease), box-shadow 140ms;
+}
+.vms-pill-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 26px rgba(15, 23, 42, 0.24); }
+.vms-pill-btn.good { --tone: #16a34a; }
+.vms-pill-btn.ok { --tone: #2563eb; }
+.vms-pill-btn.warn { --tone: #b45309; }
+.vms-pill-btn.bad { --tone: #dc2626; }
+.vms-pill-btn.muted { --tone: #6b7280; }
+.vms-pill-count {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--tone, #6b7280);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+@media (prefers-color-scheme: dark) {
+  .vms-pill-btn { --tone: #eceef2; background: #1e2128; border-color: #2b2f38; }
+  .vms-pill-btn.good { --tone: #4ade80; }
+  .vms-pill-btn.ok { --tone: #60a5fa; }
+  .vms-pill-btn.warn { --tone: #fbbf24; }
+  .vms-pill-btn.bad { --tone: #f87171; }
+  .vms-pill-btn.muted { --tone: #9ca3af; }
+  .vms-pill-count { color: #16181d; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vms-calc, .vms-pill { animation: none !important; }
+  .vms-sticky, .vms-pill-btn, .vms-searchbar { transition: none !important; }
 }

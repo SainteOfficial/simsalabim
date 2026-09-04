@@ -581,6 +581,79 @@ function dedupeTires(tires) {
   return [...byPos.values()];
 }
 
+/* ------------------------------------------------------------ Toolbar-Badge */
+
+const BADGE_COLORS = {
+  kaufen: '#16a34a',
+  kaufen_mit_vorbehalt: '#2563eb',
+  nachverhandeln: '#d97706',
+  finger_weg: '#dc2626',
+  unklar: '#6b7280'
+};
+
+const BADGE_TEXT = {
+  kaufen: 'OK',
+  kaufen_mit_vorbehalt: 'OK',
+  nachverhandeln: '!',
+  finger_weg: 'X',
+  unklar: '?'
+};
+
+async function setBadge(tabId, state, result) {
+  if (tabId === undefined) return;
+  try {
+    if (state === 'busy') {
+      await chrome.action.setBadgeText({ tabId, text: '...' });
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: '#2563eb' });
+      await chrome.action.setTitle({ tabId, title: 'Autosmaya prüft dieses Fahrzeug…' });
+      return;
+    }
+    if (state === 'error') {
+      await chrome.action.setBadgeText({ tabId, text: '!' });
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: '#dc2626' });
+      await chrome.action.setTitle({ tabId, title: 'Autosmaya: Analyse fehlgeschlagen' });
+      return;
+    }
+    if (state === 'done' && result) {
+      const rec = result.verdict?.recommendation || 'unklar';
+      const crit = result.counts?.kritisch || 0;
+      const text = crit ? String(Math.min(99, crit)) : BADGE_TEXT[rec] || '?';
+      await chrome.action.setBadgeText({ tabId, text });
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLORS[rec] || '#6b7280' });
+      await chrome.action.setTitle({
+        tabId,
+        title: `Autosmaya: ${VERDICT_TITLE[rec] || 'Unklar'} · ${result.defects?.length || 0} Mängel`
+      });
+      return;
+    }
+    await chrome.action.setBadgeText({ tabId, text: '' });
+    await chrome.action.setTitle({ tabId, title: 'Autosmaya – Fahrzeug prüfen' });
+  } catch {
+    /* Tab kann bereits geschlossen sein */
+  }
+}
+
+const VERDICT_TITLE = {
+  kaufen: 'Kaufen',
+  kaufen_mit_vorbehalt: 'Kaufen mit Vorbehalt',
+  nachverhandeln: 'Nachverhandeln',
+  finger_weg: 'Finger weg',
+  unklar: 'Unklar'
+};
+
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status === 'loading') setBadge(tabId, 'idle');
+});
+
+/* -------------------------------------------------------------- Tastatur */
+
+chrome.commands?.onCommand.addListener(async (command) => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+  const type = command === 'analyze-page' ? 'TRIGGER_SCAN' : 'TOGGLE_PANEL';
+  chrome.tabs.sendMessage(tab.id, { type, force: false }).catch(() => {});
+});
+
 /* ---------------------------------------------------------------- Messaging */
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -595,17 +668,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   switch (msg?.type) {
     case 'ANALYZE': {
+      setBadge(tabId, 'busy');
       analyze({ tabId, ...msg.payload })
-        .then((result) => sendResponse({ ok: true, result }))
-        .catch((err) =>
+        .then((result) => {
+          setBadge(tabId, 'done', result);
+          sendResponse({ ok: true, result });
+        })
+        .catch((err) => {
+          setBadge(tabId, 'error');
           sendResponse({
             ok: false,
             error: String(err?.message || err),
             code: err?.code || (err instanceof OpenRouterError ? 'API' : 'GENERIC')
-          })
-        );
+          });
+        });
       return true;
     }
+
+    case 'CLEAR_BADGE':
+      setBadge(tabId, 'idle');
+      sendResponse({ ok: true });
+      return false;
 
     case 'ABORT':
       running.get(tabId)?.abort();

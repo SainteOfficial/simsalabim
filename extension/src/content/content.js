@@ -33,7 +33,12 @@
     dismissed: new Set(),
     openDefects: new Set(),
     expandAll: false,
-    progressPct: null
+    progressPct: null,
+    search: '',
+    sort: 'schwere',
+    scrolled: false,
+    closed: false,
+    theme: 'auto'
   };
 
   let ui = null;
@@ -51,6 +56,57 @@
   function fmtCost(n) {
     if (typeof n !== 'number') return null;
     return n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
+  }
+
+  /** "18.900 EUR" / "1.830,50 €" -> 18900 / 1830.5 */
+  function parseEuro(value) {
+    if (typeof value === 'number') return value;
+    if (!value) return null;
+    const m = String(value).match(/(\d[\d.,\s']*)/);
+    if (!m) return null;
+    let raw = m[1].replace(/[\s']/g, '');
+    if (raw.includes(',')) raw = raw.replace(/\./g, '').replace(',', '.');
+    else if (/\.\d{3}(\D|$)/.test(raw + ' ')) raw = raw.replace(/\./g, '');
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /**
+   * Rechnet aus den belegten Angaben - ohne Schätzungen der KI.
+   * Alles hier ist nachvollziehbar aus dem Dokument bzw. der Seite abgeleitet.
+   */
+  function computeNumbers(r, ctx) {
+    const defects = r.defects || [];
+    const withAmount = defects.filter((d) => typeof d.estimated_cost_eur === 'number');
+    const documented = withAmount.reduce((a, d) => a + d.estimated_cost_eur, 0);
+    const urgent = defects
+      .filter((d) => d.affects_roadworthiness && typeof d.estimated_cost_eur === 'number')
+      .reduce((a, d) => a + d.estimated_cost_eur, 0);
+    const urgentOpen = defects.filter(
+      (d) => d.affects_roadworthiness && typeof d.estimated_cost_eur !== 'number'
+    ).length;
+
+    const v = r.verdict || {};
+    const negotiation = (v.negotiation_points || []).reduce((a, p) => a + (p.amount_eur || 0), 0);
+    const price = parseEuro(ctx.preis);
+    const reportTotal =
+      typeof r.total_estimated_repair_cost_eur === 'number' ? r.total_estimated_repair_cost_eur : null;
+    const repair = documented || reportTotal || 0;
+
+    return {
+      documented: withAmount.length ? documented : null,
+      documentedCount: withAmount.length,
+      totalCount: defects.length,
+      withoutAmount: defects.length - withAmount.length,
+      urgent: urgent || null,
+      urgentOpen,
+      reportTotal,
+      budgetMax: typeof v.repair_budget_max_eur === 'number' ? v.repair_budget_max_eur : null,
+      negotiation: negotiation || null,
+      price,
+      effective: price !== null && repair ? price + repair : null,
+      target: price !== null && negotiation ? price - negotiation : null
+    };
   }
 
   function esc(s) {
@@ -127,13 +183,47 @@
       const label = norm(el.innerText) || norm(el.getAttribute('aria-label')) || hit.word;
       const existing = found.get(url);
       if (!existing || existing.score < hit.score) {
-        found.set(url, { url, label: label.slice(0, 60), kind: hit.kind, score: hit.score });
+        found.set(url, { url, label: label.slice(0, 60), kind: hit.kind, score: hit.score, el });
       }
     }
-    return [...found.values()]
+    const docs = [...found.values()]
       .filter((d) => !state.dismissed.has(d.url))
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_DOCS);
+    markLinks(docs);
+    // Das DOM-Element bleibt lokal - es wird nicht an den Hintergrunddienst geschickt.
+    return docs.map(({ el, ...rest }) => rest);
+  }
+
+  const MARK_ATTR = 'data-autosmaya';
+  let markStyleAdded = false;
+
+  /**
+   * Markiert die erkannten Dokument-Links auf der Seite, damit sichtbar ist,
+   * was Autosmaya gelesen hat. Layout-neutral über outline, kein Reflow.
+   */
+  function markLinks(found) {
+    if (!state.settings?.markLinks) return;
+    if (!markStyleAdded) {
+      const style = document.createElement('style');
+      style.id = 'autosmaya-marks';
+      style.textContent = [
+        `[${MARK_ATTR}] {`,
+        '  outline: 2px solid rgba(37, 99, 235, .55) !important;',
+        '  outline-offset: 2px !important;',
+        '  border-radius: 3px;',
+        '}',
+        `[${MARK_ATTR}="condition"] { outline-color: rgba(220, 38, 38, .6) !important; }`
+      ].join('\n');
+      (document.head || document.documentElement).appendChild(style);
+      markStyleAdded = true;
+    }
+    document.querySelectorAll(`[${MARK_ATTR}]`).forEach((el) => el.removeAttribute(MARK_ATTR));
+    for (const { el, kind, label } of found) {
+      if (!el?.setAttribute) continue;
+      el.setAttribute(MARK_ATTR, kind);
+      if (!el.title) el.title = `Autosmaya liest dieses Dokument aus (${label})`;
+    }
   }
 
   /** Liest Label/Wert-Paare (Tabellen, Definitionslisten, Grid-Layouts) aus. */
@@ -376,7 +466,10 @@
   /* ------------------------------------------------------------------- UI */
 
   async function buildUi() {
-    if (ui) return ui;
+    if (ui) {
+      ui.root.className = 'vms-root';
+      return ui;
+    }
     const host = document.createElement('div');
     host.id = 'vms-host';
     host.style.cssText = 'all:initial;position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;';
@@ -396,6 +489,12 @@
     ui = { host, shadow, root };
     applyStoredPosition();
     root.addEventListener('click', onClick);
+    root.addEventListener('change', (e) => {
+      const sel = e.target.closest('[data-act="sort"]');
+      if (!sel) return;
+      state.sort = sel.value;
+      render();
+    });
     return ui;
   }
 
@@ -418,9 +517,8 @@
       chrome.storage.local.set({ panelCollapsed: state.collapsed });
       render();
     } else if (act === 'close') {
-      state.docs.forEach((d) => state.dismissed.add(d.url));
-      ui.host.remove();
-      ui = null;
+      state.closed = true;
+      showPill();
     } else if (act === 'run') {
       runAnalysis();
     } else if (act === 'rerun') {
@@ -439,6 +537,19 @@
       btn.setAttribute('aria-expanded', String(open));
       if (open) state.openDefects.add(card.dataset.id);
       else state.openDefects.delete(card.dataset.id);
+    } else if (act === 'theme') {
+      state.theme = THEME_ORDER[(THEME_ORDER.indexOf(state.theme) + 1) % THEME_ORDER.length];
+      chrome.storage.local.set({ panelTheme: state.theme });
+      render();
+    } else if (act === 'scroll-top') {
+      ui.root.querySelector('.vms-body')?.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (act === 'page') {
+      const url = primaryDocUrl();
+      if (url) window.open(`${url}#page=${btn.dataset.page}`, '_blank', 'noopener');
+    } else if (act === 'restore') {
+      state.closed = false;
+      state.collapsed = false;
+      buildUi().then(render);
     } else if (act === 'expand-all') {
       state.expandAll = !state.expandAll;
       if (!state.expandAll) state.openDefects.clear();
@@ -446,6 +557,22 @@
     } else if (act === 'open-doc') {
       window.open(btn.dataset.url, '_blank', 'noopener');
     }
+  }
+
+  /** Kleine Pille, mit der sich das geschlossene Panel zurückholen lässt. */
+  function showPill() {
+    if (!ui) return;
+    const r = state.result;
+    const meta = r ? VERDICT_META[r.verdict?.recommendation] || VERDICT_META.unklar : null;
+    ui.root.className = 'vms-pill';
+    ui.root.removeAttribute('style');
+    ui.root.innerHTML = `
+      <button class="vms-pill-btn ${meta ? meta.tone : 'muted'}" data-act="restore"
+        title="Autosmaya wieder öffnen">
+        ${carIcon()}
+        ${r ? `<span>${meta.label}</span>` : '<span>Autosmaya</span>'}
+        ${r?.counts?.kritisch ? `<span class="vms-pill-count">${r.counts.kritisch}</span>` : ''}
+      </button>`;
   }
 
   function copyResult(btn) {
@@ -495,6 +622,8 @@
   /* --------------------------------------------------------------- Render */
 
   const SEV_LABEL = { kritisch: 'Kritisch', mittel: 'Mittel', gering: 'Gering', hinweis: 'Hinweis' };
+  const THEME_LABEL = { auto: 'automatisch', light: 'hell', dark: 'dunkel' };
+  const THEME_ORDER = ['auto', 'light', 'dark'];
 
   const VERDICT_META = {
     kaufen: { label: 'Kaufen', short: 'Kaufen', tone: 'good', icon: 'thumb' },
@@ -515,10 +644,20 @@
     if (!ui) return;
     const { root } = ui;
     root.dataset.status = state.status;
+    if (state.theme === 'auto') delete root.dataset.theme;
+    else root.dataset.theme = state.theme;
+    root.classList.toggle('scrolled', state.scrolled);
     root.classList.toggle('collapsed', Boolean(state.collapsed));
-    root.innerHTML = header() + (state.collapsed ? '' : body() + footer());
+    root.innerHTML =
+      header() +
+      (state.collapsed ? '' : body() + footer()) +
+      (state.collapsed ? '' : '<div class="vms-resize" title="Größe ändern" aria-hidden="true"></div>');
     attachDrag();
+    attachResize();
+    attachScroll();
+    attachSearch();
     animateScore();
+    applySize();
   }
 
   /** Score-Ring erst nach dem Einfügen animieren, damit der Übergang läuft. */
@@ -570,10 +709,27 @@
         </div>
         ${badge}
         <div class="vms-actions">
-          <button class="vms-icon" data-act="collapse" aria-label="Ein-/Ausklappen" title="Ein-/Ausklappen">${state.collapsed ? chevronDown() : chevronUp()}</button>
+          <button class="vms-icon" data-act="collapse" aria-label="Ein-/Ausklappen" title="Ein-/Ausklappen (Esc)">${state.collapsed ? chevronDown() : chevronUp()}</button>
           <button class="vms-icon" data-act="close" aria-label="Schließen" title="Schließen">${xIcon()}</button>
         </div>
-      </header>`;
+      </header>
+      ${state.status === 'done' ? stickyBar() : ''}`;
+  }
+
+  /** Kompakte Leiste, die beim Scrollen einblendet, damit das Urteil sichtbar bleibt. */
+  function stickyBar() {
+    const r = state.result;
+    const v = r?.verdict || {};
+    const meta = VERDICT_META[v.recommendation] || VERDICT_META.unklar;
+    const crit = r?.counts?.kritisch || 0;
+    return `
+      <div class="vms-sticky ${meta.tone}">
+        <span class="vms-sticky-dot"></span>
+        <span class="vms-sticky-label">${meta.label}</span>
+        ${typeof v.score === 'number' ? `<span class="vms-sticky-score">${v.score}</span>` : ''}
+        <span class="vms-sticky-counts">${r.defects.length} Mängel${crit ? `, ${crit} kritisch` : ''}</span>
+        <button class="vms-sticky-top" data-act="scroll-top" title="Nach oben">${chevronUp()}</button>
+      </div>`;
   }
 
   function body() {
@@ -656,11 +812,17 @@
       )
       .join('');
 
-    const visible = r.defects.filter((d) => state.filter === 'alle' || d.severity === state.filter);
+    const visible = r.defects
+      .filter((d) => state.filter === 'alle' || d.severity === state.filter)
+      .slice()
+      .sort(SORTERS[state.sort] || SORTERS.schwere);
+
+    const showSearch = r.defects.length >= 5;
 
     return `
       <div class="vms-body">
         ${verdictBlock(v, r)}
+        ${calcBlock(r)}
         ${listBlock(v.deal_breakers, 'bad', alertIcon(), 'Ausschlusskriterien')}
         ${listBlock(v.before_first_drive, 'warn', wrenchIcon(), 'Vor der ersten Fahrt')}
         ${r.summary ? `<p class="vms-lead">${esc(r.summary)}</p>` : ''}
@@ -668,7 +830,21 @@
           <div class="vms-chips">${chips}</div>
           <button class="vms-ghost sm" data-act="expand-all">${state.expandAll ? 'Zuklappen' : 'Alle Details'}</button>
         </div>
+        ${showSearch
+          ? `<div class="vms-searchbar">
+               <span class="vms-search-icon">${searchIcon()}</span>
+               <input class="vms-search" type="search" placeholder="Mängel durchsuchen…"
+                 value="${esc(state.search)}" aria-label="Mängel durchsuchen" />
+               <select class="vms-sort" aria-label="Sortierung" data-act="sort">
+                 <option value="schwere"${state.sort === 'schwere' ? ' selected' : ''}>Schwere</option>
+                 <option value="kosten"${state.sort === 'kosten' ? ' selected' : ''}>Kosten</option>
+                 <option value="seite"${state.sort === 'seite' ? ' selected' : ''}>Seite</option>
+               </select>
+             </div>
+             <div class="vms-hits" hidden></div>`
+          : ''}
         <div class="vms-list">${visible.map((d, i) => defectCard(d, i)).join('')}</div>
+        <div class="vms-nohits" hidden>Kein Mangel passt zu dieser Suche.</div>
         ${negotiationBlock(v)}
         ${tiresBlock(r)}
         ${r.missing_info?.length ? `<div class="vms-missing"><strong>Nicht im Dokument:</strong> ${esc(r.missing_info.join(', '))}</div>` : ''}
@@ -733,6 +909,68 @@
       </div>`;
   }
 
+  function calcBlock(r) {
+    const n = computeNumbers(r, state.context);
+    if (n.documented === null && n.price === null && !n.reportTotal) return '';
+
+    const row = (label, value, hint, cls = '') =>
+      `<div class="vms-calc-row ${cls}">
+         <span class="vms-calc-label">${esc(label)}${hint ? `<small>${esc(hint)}</small>` : ''}</span>
+         <span class="vms-calc-value">${value}</span>
+       </div>`;
+
+    const repairRows = [];
+    if (n.documented !== null) {
+      repairRows.push(
+        row(
+          'Reparatur belegt',
+          esc(fmtCost(n.documented)),
+          `${n.documentedCount} von ${n.totalCount} Positionen beziffert`
+        )
+      );
+    }
+    if (n.reportTotal !== null && n.reportTotal !== n.documented) {
+      repairRows.push(row('Summe laut Dokument', esc(fmtCost(n.reportTotal))));
+    }
+    if (n.urgent !== null) {
+      repairRows.push(
+        row(
+          'davon sicherheitsrelevant',
+          esc(fmtCost(n.urgent)),
+          n.urgentOpen ? `+ ${n.urgentOpen} Position(en) ohne Betrag` : '',
+          'urgent'
+        )
+      );
+    }
+    if (n.withoutAmount) {
+      repairRows.push(
+        row('Ohne Betrag im Dokument', `${n.withoutAmount} Position${n.withoutAmount > 1 ? 'en' : ''}`, '', 'open')
+      );
+    }
+
+    const priceRows = [];
+    if (n.price !== null) {
+      priceRows.push(row('Angebotspreis', esc(fmtCost(n.price))));
+      if (n.effective !== null) {
+        priceRows.push(row('Effektivpreis', esc(fmtCost(n.effective)), 'Preis + belegte Reparatur', 'strong'));
+      }
+      if (n.target !== null) {
+        priceRows.push(row('Verhandlungsziel', esc(fmtCost(n.target)), 'Preis − Verhandlungshebel', 'target'));
+      }
+    } else if (n.negotiation !== null) {
+      priceRows.push(row('Verhandlungshebel gesamt', esc(fmtCost(n.negotiation)), '', 'target'));
+    }
+
+    return `
+      <section class="vms-calc">
+        <div class="vms-calc-head">${calcIcon()}<strong>Berechnet</strong>
+          <span class="vms-calc-note">nur belegte Beträge</span></div>
+        ${repairRows.join('')}
+        ${repairRows.length && priceRows.length ? '<div class="vms-calc-sep"></div>' : ''}
+        ${priceRows.join('')}
+      </section>`;
+  }
+
   function listBlock(items, tone, icon, title) {
     if (!items?.length) return '';
     return `
@@ -764,7 +1002,8 @@
     const cost = fmtCost(d.estimated_cost_eur);
     const open = state.expandAll || state.openDefects.has(defectId(d));
     return `
-      <article class="vms-defect ${d.severity} ${open ? 'open' : ''}" style="--i:${index}" data-id="${esc(defectId(d))}">
+      <article class="vms-defect ${d.severity} ${open ? 'open' : ''}" style="--i:${index}"
+        data-id="${esc(defectId(d))}" data-search="${esc(searchText(d))}">
         <button class="vms-defect-head" data-act="toggle-defect" aria-expanded="${open}">
           <span class="vms-sev" title="${SEV_LABEL[d.severity]}"></span>
           <span class="vms-defect-title">${esc(d.title)}</span>
@@ -777,14 +1016,36 @@
           <div class="vms-meta">
             ${d.area ? `<span>${esc(d.area)}</span>` : ''}
             <span class="vms-cat">${esc(CATEGORY_LABEL[d.category] || d.category)}</span>
-            ${d.source_page ? `<span>Seite ${d.source_page}</span>` : ''}
+            ${d.source_page
+              ? primaryDocUrl()
+                ? `<button class="vms-page" data-act="page" data-page="${d.source_page}"
+                     title="PDF auf Seite ${d.source_page} öffnen">Seite ${d.source_page}${externalIcon()}</button>`
+                : `<span>Seite ${d.source_page}</span>`
+              : ''}
           </div>
           ${d.quote ? `<blockquote>${esc(d.quote)}</blockquote>` : ''}
         </div></div></div>
       </article>`;
   }
 
+  const SORTERS = {
+    schwere: (a, b) =>
+      ({ kritisch: 0, mittel: 1, gering: 2, hinweis: 3 })[a.severity] -
+      ({ kritisch: 0, mittel: 1, gering: 2, hinweis: 3 })[b.severity],
+    kosten: (a, b) => (b.estimated_cost_eur || 0) - (a.estimated_cost_eur || 0),
+    seite: (a, b) => (a.source_page || 999) - (b.source_page || 999)
+  };
+
+  const searchText = (d) =>
+    `${d.title} ${d.description} ${d.area} ${CATEGORY_LABEL[d.category] || d.category} ${d.quote || ''}`
+      .toLowerCase();
+
   const defectId = (d) => `${d.title}|${d.area}`.toLowerCase().replace(/\s+/g, '-').slice(0, 80);
+
+  function primaryDocUrl() {
+    const docs = state.result?.meta?.coverage?.documents || [];
+    return docs[0]?.url || state.docs[0]?.url || null;
+  }
 
   function tiresBlock(r) {
     if (!r.tires?.length) return '';
@@ -840,11 +1101,109 @@
       <footer class="vms-foot">
         <span class="vms-meta-line" title="${bits.join(' · ')}">${bits.join(' · ')}</span>
         <span class="vms-foot-actions">
+          <button class="vms-icon sm" data-act="theme" aria-label="Darstellung wechseln"
+            title="Darstellung: ${THEME_LABEL[state.theme]}">${themeIcon(state.theme)}</button>
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="copy">Kopieren</button>' : ''}
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="rerun" title="Cache umgehen und neu auswerten">Neu</button>' : ''}
           <button class="vms-ghost sm" data-act="options">Einstellungen</button>
         </span>
       </footer>`;
+  }
+
+  /* ------------------------------------------------------- Interaktionen */
+
+  /** Blendet die Urteilsleiste ein, sobald der Empfehlungsblock weggescrollt ist. */
+  function attachScroll() {
+    const body = ui.root.querySelector('.vms-body');
+    if (!body) return;
+    body.scrollTop = state.scrollTop || 0;
+    body.addEventListener('scroll', () => {
+      state.scrollTop = body.scrollTop;
+      const scrolled = body.scrollTop > 90;
+      if (scrolled !== state.scrolled) {
+        state.scrolled = scrolled;
+        ui.root.classList.toggle('scrolled', scrolled);
+      }
+    });
+  }
+
+  /** Sucht direkt im DOM, damit der Cursor im Suchfeld nicht verloren geht. */
+  function attachSearch() {
+    const input = ui.root.querySelector('.vms-search');
+    if (!input) return;
+    input.addEventListener('input', () => {
+      state.search = input.value;
+      applySearch();
+    });
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape' && input.value) {
+        e.preventDefault();
+        input.value = '';
+        state.search = '';
+        applySearch();
+      }
+    });
+    if (state.search) {
+      applySearch();
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }
+
+  function applySearch() {
+    const q = state.search.trim().toLowerCase();
+    const cards = [...ui.root.querySelectorAll('.vms-defect')];
+    let hits = 0;
+    for (const card of cards) {
+      const match = !q || (card.dataset.search || '').includes(q);
+      card.hidden = !match;
+      if (match) hits++;
+    }
+    const hitBox = ui.root.querySelector('.vms-hits');
+    if (hitBox) {
+      hitBox.hidden = !q;
+      hitBox.textContent = `${hits} von ${cards.length} Mängeln`;
+    }
+    const empty = ui.root.querySelector('.vms-nohits');
+    if (empty) empty.hidden = !(q && hits === 0);
+  }
+
+  /** Panel in Breite und Höhe anpassbar; die Größe bleibt gespeichert. */
+  function attachResize() {
+    const grip = ui.root.querySelector('.vms-resize');
+    if (!grip) return;
+    grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const rect = ui.root.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      grip.setPointerCapture(e.pointerId);
+      ui.root.classList.add('resizing');
+
+      const move = (ev) => {
+        const width = Math.min(720, Math.max(320, rect.width - (ev.clientX - startX)));
+        const height = Math.min(window.innerHeight - 40, Math.max(240, rect.height + (ev.clientY - startY)));
+        state.size = { width, height };
+        applySize();
+      };
+      const up = (ev) => {
+        grip.releasePointerCapture(ev.pointerId);
+        ui.root.classList.remove('resizing');
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        chrome.storage.local.set({ panelSize: state.size });
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+    });
+  }
+
+  function applySize() {
+    if (!state.size || !ui) return;
+    ui.root.style.width = `${state.size.width}px`;
+    if (!state.collapsed) ui.root.style.maxHeight = `${state.size.height}px`;
+    else ui.root.style.maxHeight = '';
   }
 
   /* ------------------------------------------------------------- Dragging */
@@ -900,6 +1259,16 @@
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3.5a5 5 0 0 0-6.3 6.3L3.6 15.4a2 2 0 1 0 2.8 2.8l5.6-5.6a5 5 0 0 0 6.3-6.3l-2.9 2.9-2.1-2.1z"/></svg>';
   const tagIcon = () =>
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9z"/><circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none"/></svg>';
+  const externalIcon = () =>
+    '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h5v5"/><path d="M19 5l-7.5 7.5"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg>';
+  const themeIcon = (mode) =>
+    ({
+      auto: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="7.5"/><path d="M12 4.5v15" stroke-linecap="round"/><path d="M12 4.5a7.5 7.5 0 0 1 0 15z" fill="currentColor" stroke="none"/></svg>',
+      light: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>',
+      dark: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>'
+    })[mode] || '';
+  const calcIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 7.5h7"/><path d="M9 12h.01M12 12h.01M15 12h.01M9 16h.01M12 16h.01M15 16h.01"/></svg>';
   const tireIcon = () =>
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/></svg>';
   const questionIcon = () =>
@@ -918,6 +1287,8 @@
     if (!res.ok) return;
     state.settings = res.settings;
     state.collapsed = state.settings.panelCollapsed;
+    state.theme = state.settings.panelTheme || 'auto';
+    state.size = state.settings.panelSize || null;
 
     if (!hostAllowed(state.settings, location.hostname)) return;
 
@@ -987,7 +1358,49 @@
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener('popstate', () => scheduleScan());
 
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'Escape' || !ui || state.closed || state.collapsed) return;
+      if (e.target?.closest?.('input, textarea, select, [contenteditable]')) return;
+      state.collapsed = true;
+      chrome.storage.local.set({ panelCollapsed: true });
+      render();
+    },
+    true
+  );
+
   chrome.runtime.onMessage.addListener((msg, _s, respond) => {
+    if (msg?.type === 'GET_STATE') {
+      const r = state.result;
+      respond({
+        ok: true,
+        status: state.status,
+        verdict: r?.verdict || null,
+        defects: r?.defects?.length || 0,
+        counts: r?.counts || null,
+        pages: r?.meta?.coverage?.pagesRead || 0
+      });
+      return false;
+    }
+    if (msg?.type === 'TOGGLE_PANEL') {
+      if (!ui) {
+        state.pageKey = '';
+        scan({ auto: false }).then(() => respond({ ok: Boolean(ui) }));
+        return true;
+      }
+      if (state.closed) {
+        state.closed = false;
+        state.collapsed = false;
+        buildUi().then(render);
+      } else {
+        state.collapsed = !state.collapsed;
+        chrome.storage.local.set({ panelCollapsed: state.collapsed });
+        render();
+      }
+      respond({ ok: true });
+      return false;
+    }
     if (msg?.type === 'TRIGGER_SCAN') {
       state.pageKey = '';
       state.dismissed.clear();

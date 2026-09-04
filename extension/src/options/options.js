@@ -9,6 +9,7 @@ const FIELDS = {
   visionModel: 'value',
   autoRun: 'checked',
   visionFallback: 'checked',
+  markLinks: 'checked',
   cacheEnabled: 'checked',
   visionMaxPages: 'number',
   maxChars: 'number',
@@ -115,6 +116,10 @@ $('testKey').addEventListener('click', async () => {
     box.className = 'status err';
     box.textContent = res?.error || 'Test fehlgeschlagen.';
   }
+});
+
+$('shortcuts').addEventListener('click', () => {
+  chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
 });
 
 $('clearCache').addEventListener('click', async () => {

@@ -4,7 +4,7 @@ import { priceFor } from './config.js';
 
 const DEFAULT_BASE = 'https://openrouter.ai/api/v1';
 const REFERER = 'https://github.com/SainteOfficial/simsalabim';
-const TITLE = 'Fahrzeug-Maengel-Scanner';
+const TITLE = 'Autosmaya';
 
 export class OpenRouterError extends Error {
   constructor(message, { status, retryable = false, body } = {}) {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fahrzeug-Mängel-Scanner – Einstellungen</title>
+    <title>Autosmaya – Einstellungen</title>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
@@ -18,8 +18,9 @@
           </svg>
         </div>
         <div>
-          <h1>Fahrzeug-Mängel-Scanner</h1>
-          <p>Liest Fahrzeug-PDF und Zustandsbericht automatisch aus und listet alle Mängel.</p>
+          <h1>Autosmaya</h1>
+          <p>Liest Fahrzeug-PDF und Zustandsbericht automatisch aus, listet alle Mängel,
+            rechnet die Kosten und gibt eine Kaufempfehlung.</p>
         </div>
       </header>
 
@@ -68,6 +69,11 @@
           <input id="visionFallback" type="checkbox" />
           <span><strong>Gescannte PDFs per Bilderkennung lesen</strong><small>Greift bei reinen Scans und
             zusätzlich für einzelne Seiten ohne Textebene (z.&nbsp;B. Schadensskizzen).</small></span>
+        </label>
+        <label class="switch-row">
+          <input id="markLinks" type="checkbox" />
+          <span><strong>Gefundene Links auf der Seite markieren</strong><small>Zeigt mit einem farbigen
+            Rahmen, welche Dokumente ausgewertet werden.</small></span>
         </label>
         <label class="switch-row">
           <input id="cacheEnabled" type="checkbox" />
@@ -121,6 +127,16 @@
           <small>Nur nötig für ungewöhnliche Bezeichnungen. Zustandsbericht, Fahrzeug PDF, Appraisal,
             Gutachten, Prüfbericht, Datenblatt &amp; Co. erkennt die Extension bereits von selbst.</small>
         </label>
+      </section>
+
+      <section class="card">
+        <h2>Tastenkürzel</h2>
+        <div class="keys">
+          <div><kbd>Alt</kbd><kbd>Shift</kbd><kbd>M</kbd><span>Panel ein-/ausblenden</span></div>
+          <div><kbd>Alt</kbd><kbd>Shift</kbd><kbd>A</kbd><span>Seite jetzt prüfen</span></div>
+          <div><kbd>Esc</kbd><span>Panel einklappen</span></div>
+        </div>
+        <button id="shortcuts" class="ghost" type="button">Kürzel in Chrome ändern</button>
       </section>
 
       <section class="card">

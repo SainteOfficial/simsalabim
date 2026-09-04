@@ -1,8 +1,8 @@
-# Fahrzeug-Mängel-Scanner
+# Autosmaya
 
 Chrome-Extension, die auf Fahrzeugseiten automatisch **Fahrzeug PDF** und **Zustandsbericht**
-findet, die PDFs herunterlädt, **vollständig** ausliest und per KI (OpenRouter) alle Mängel
-samt **Kaufempfehlung** in einem kleinen Fenster oben rechts anzeigt.
+findet, die PDFs herunterlädt, **vollständig** ausliest und per KI (OpenRouter) alle Mängel,
+die **berechneten Kosten** und eine **Kaufempfehlung** in einem kleinen Fenster oben rechts anzeigt.
 
 <p><img src="docs/panel.png" width="380" alt="Panel im hellen Modus">
 <img src="docs/panel-dark.png" width="380" alt="Panel im dunklen Modus"></p>
@@ -20,9 +20,9 @@ samt **Kaufempfehlung** in einem kleinen Fenster oben rechts anzeigt.
    Zustandsberichten erhalten bleiben. Siehe [Vollständigkeit](#vollständigkeit).
 4. **Analysieren** – OpenRouter mit **Structured Output** (JSON-Schema), `temperature: 0`.
    Das Modell darf nichts erfinden und muss zu jedem Mangel ein wörtliches Zitat als Beleg liefern.
-5. **Anzeigen** – Panel oben rechts: Kaufempfehlung, Zustands-Score, Mängel nach Schwere
-   sortiert und filterbar, TÜV-Relevanz, Kosten laut Dokument, Reifenprofil, Verhandlungshebel,
-   Seitenzahl und Beleg-Zitat pro Mangel. Verschiebbar, ein-/ausklappbar, hell und dunkel.
+5. **Anzeigen** – Panel oben rechts: Kaufempfehlung, Zustands-Score, Kostenrechnung, Mängel
+   nach Schwere sortiert und filterbar, TÜV-Relevanz, Reifenprofil, Verhandlungshebel,
+   Seitenzahl und Beleg-Zitat pro Mangel.
 
 ## Kaufempfehlung
 
@@ -48,6 +48,43 @@ Dazu gibt es:
 
 Das Urteil bewertet ausschließlich den **dokumentierten** Zustand. Es ersetzt keine
 Besichtigung und keine Probefahrt.
+
+## Berechnet
+
+Der Block **Berechnet** rechnet zusammen, was das Dokument hergibt – ohne Schätzungen des
+Modells. Jede Zeile ist auf belegte Beträge zurückführbar:
+
+| Zeile | Woher |
+| --- | --- |
+| Reparatur belegt | Summe aller Mängel mit Betrag im Dokument, plus „4 von 6 Positionen beziffert" |
+| Summe laut Dokument | falls das Dokument selbst eine Gesamtsumme nennt und sie abweicht |
+| davon sicherheitsrelevant | nur die HU-/verkehrssicherheitsrelevanten Positionen |
+| Ohne Betrag im Dokument | wie viele Mängel unbeziffert bleiben – der Rest ist offenes Risiko |
+| Angebotspreis | wird von der Fahrzeugseite gelesen |
+| **Effektivpreis** | Angebotspreis + belegte Reparatur – was das Auto real kostet |
+| Verhandlungsziel | Angebotspreis − Summe der Verhandlungshebel |
+
+Steht kein Preis auf der Seite, entfällt der untere Teil und es wird nur die Reparatursumme
+ausgewiesen.
+
+## Sichtbarkeit und Bedienung
+
+- **Toolbar-Symbol** trägt das Ergebnis: farbiges Abzeichen mit der Zahl der kritischen Mängel,
+  im Tooltip das Urteil. Man sieht das Ergebnis, ohne das Panel zu öffnen.
+- **Urteilsleiste**, die beim Scrollen einblendet – Empfehlung, Score und Mängelzahl bleiben
+  immer sichtbar, auch weit unten in der Liste.
+- **Markierte Links**: die erkannten Dokumente bekommen auf der Seite einen farbigen Rahmen
+  (rot = Zustandsbericht, blau = sonstiges PDF). Abschaltbar.
+- **Rückhol-Pille**: geschlossen verschwindet das Panel nicht, sondern schrumpft zu einer
+  kleinen Pille mit Urteil und kritischer Mängelzahl.
+- **Suche und Sortierung** in der Mängelliste (ab 5 Mängeln), sortierbar nach Schwere,
+  Kosten oder Seite.
+- **Sprung ins PDF**: Klick auf „Seite 17" öffnet das Dokument direkt auf dieser Seite.
+- **Größe und Position** frei einstellbar und gespeichert; Darstellung automatisch, hell
+  oder dunkel per Schalter in der Fußzeile.
+- **Popup** zeigt das Urteil des aktuellen Tabs samt Leseabdeckung.
+- **Tastenkürzel**: `Alt+Shift+M` Panel ein-/ausblenden, `Alt+Shift+A` Seite jetzt prüfen,
+  `Esc` einklappen. In Chrome frei änderbar.
 
 ## Vollständigkeit
 
@@ -77,6 +114,8 @@ Der Key wird ausschließlich lokal in `chrome.storage.local` gespeichert und nur
 gesendet. Fahrzeugseiten und PDFs gehen an keinen anderen Server.
 
 Danach passiert alles von selbst: Fahrzeugseite öffnen → Panel erscheint → Urteil steht da.
+
+<p><img src="docs/panel-sticky.png" width="380" alt="Urteilsleiste beim Scrollen"></p>
 
 ## Kosten und Modellwahl
 
@@ -110,6 +149,7 @@ Zusätzlich spart die Extension automatisch:
 | API-Key / API-Endpunkt | OpenRouter-Zugang; Endpunkt nur ändern, wenn ein eigener Proxy genutzt wird |
 | Modell / Scan-Modell | getrennte Modelle für Text-PDFs und gescannte PDFs |
 | Automatisch starten | Analyse startet ohne Klick, sobald eine Fahrzeugseite erkannt wird |
+| Links markieren | farbiger Rahmen um die erkannten Dokument-Links auf der Seite |
 | Bilderkennung + max. Seiten | Bildauswertung für Scans und textlose Seiten, mit Kostendeckel |
 | Zeichen pro KI-Aufruf | ab wann ein Dokument in Teilen ausgewertet wird (Standard 120.000) |
 | Sprache der Ausgabe | Deutsch oder Englisch |
@@ -117,9 +157,10 @@ Zusätzlich spart die Extension automatisch:
 | Zusätzliche Stichwörter | für ungewöhnlich benannte Links |
 | Cache | Größe ansehen und leeren |
 
-Über das Symbol in der Toolbar lässt sich eine Seite auch manuell prüfen.
 „Kopieren" legt den kompletten Bericht inklusive Empfehlung, Verhandlungshebeln und
 Beleg-Zitaten als Text in die Zwischenablage.
+
+<p><img src="docs/options.png" width="520" alt="Einstellungen"></p>
 
 ## Aufbau
 
@@ -151,7 +192,7 @@ node test/e2e.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension
-ungepackt in Chromium und prüft 58 Punkte, unter anderem:
+ungepackt in Chromium und prüft 81 Punkte, unter anderem:
 
 - Erkennung von Fahrzeugseiten und Fehlalarm-Freiheit auf Blog/Preisliste
 - PDF-Download und Textextraktion inklusive erhaltener Tabellenspalten
@@ -161,6 +202,10 @@ ungepackt in Chromium und prüft 58 Punkte, unter anderem:
   nachgewiesen) in den Chunk-Prompts ankommen
 - Hybrid-Modus: Text und die eine textlose Seite als Bild im selben Aufruf
 - Cache-Treffer ohne zweiten API-Aufruf, auch für Scan- und Hybrid-Dokumente
+- **Berechnet**: belegte Summe, sicherheitsrelevanter Anteil, Effektivpreis und
+  Verhandlungsziel gegen erwartete Beträge geprüft
+- Urteilsleiste beim Scrollen, Suche, Sortierung nach Kosten, Seitensprung, Theme-Schalter,
+  Link-Markierung, Toolbar-Abzeichen, Rückhol-Pille, Esc-Kürzel, Popup-Zustand
 - Aufklapp-Animation, Filter, Einklappen, Optionsseite, reduzierte Bewegung, keine SW-Fehler
 
 Ist Chromium an einem anderen Ort installiert: `CHROME_PATH=/pfad/zu/chrome node test/e2e.mjs`.

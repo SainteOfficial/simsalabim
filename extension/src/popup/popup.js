@@ -1,6 +1,45 @@
 /* eslint-env browser */
 const $ = (id) => document.getElementById(id);
 
+const VERDICT = {
+  kaufen: { label: 'Kaufen', tone: 'good' },
+  kaufen_mit_vorbehalt: { label: 'Kaufen mit Vorbehalt', tone: 'ok' },
+  nachverhandeln: { label: 'Nachverhandeln', tone: 'warn' },
+  finger_weg: { label: 'Finger weg', tone: 'bad' },
+  unklar: { label: 'Unklar', tone: 'muted' }
+};
+
+/** Zeigt das Urteil des aktiven Tabs, ohne dass das Panel offen sein muss. */
+async function showTabState() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+  let res = null;
+  try {
+    res = await chrome.tabs.sendMessage(tab.id, { type: 'GET_STATE' });
+  } catch {
+    return;
+  }
+  if (!res?.ok || res.status !== 'done' || !res.verdict) return;
+
+  const meta = VERDICT[res.verdict.recommendation] || VERDICT.unklar;
+  $('vDot').className = `vdot ${meta.tone}`;
+  $('vLabel').className = `vlabel ${meta.tone}`;
+  $('vLabel').textContent = meta.label;
+  $('vScore').textContent = typeof res.verdict.score === 'number' ? `${res.verdict.score}/100` : '';
+  $('vScore').hidden = typeof res.verdict.score !== 'number';
+  const parts = [`${res.defects} Mängel`];
+  if (res.counts?.kritisch) parts.push(`${res.counts.kritisch} kritisch`);
+  if (res.pages) parts.push(`${res.pages} Seiten gelesen`);
+  $('vCounts').textContent = parts.join(' · ');
+  $('result').hidden = false;
+  $('run').textContent = 'Neu prüfen';
+
+  $('show').addEventListener('click', async () => {
+    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PANEL' });
+    window.close();
+  });
+}
+
 async function init() {
   const res = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
   const s = res?.settings || {};
@@ -12,6 +51,7 @@ async function init() {
   $('autoPill').className = `pill ${s.autoRun ? 'ok' : ''}`;
   $('run').disabled = !s.apiKey;
   if (!s.apiKey) $('msg').textContent = 'Bitte zuerst den OpenRouter-Key eintragen.';
+  showTabState();
 }
 
 $('run').addEventListener('click', async () => {

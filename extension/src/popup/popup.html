@@ -2,7 +2,7 @@
 <html lang="de">
   <head>
     <meta charset="utf-8" />
-    <title>Mängel-Scanner</title>
+    <title>Autosmaya</title>
     <style>
       :root {
         --bg: #fff; --soft: #f5f6f8; --border: #e3e5ea; --text: #14161a;
@@ -32,6 +32,19 @@
       .pill.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
       .pill.err { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
       .msg { font-size: 11.5px; color: var(--dim); min-height: 15px; }
+      hr { border: none; border-top: 1px solid var(--border); margin: 3px 0 1px; }
+      .verdict { display: flex; align-items: center; gap: 7px; }
+      .vdot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+      .vlabel { font-weight: 700; font-size: 14px; }
+      .vscore {
+        margin-left: auto; font-weight: 700; font-size: 12px;
+        padding: 2px 8px; border-radius: 999px; background: var(--soft);
+      }
+      .vcounts { font-size: 11.5px; color: var(--dim); margin: -2px 0 2px; }
+      .good { color: #16a34a; } .ok { color: #2563eb; }
+      .warn { color: #d97706; } .bad { color: #dc2626; } .muted { color: var(--dim); }
+      .vdot.good { background: #16a34a; } .vdot.ok { background: #2563eb; }
+      .vdot.warn { background: #d97706; } .vdot.bad { background: #dc2626; }
     </style>
   </head>
   <body>
@@ -42,9 +55,19 @@
           <path d="M3 13h18v4a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
         </svg>
       </div>
-      <h1>Fahrzeug-Mängel-Scanner</h1>
+      <h1>Autosmaya</h1>
     </header>
     <main>
+      <section id="result" hidden>
+        <div class="verdict">
+          <span id="vDot" class="vdot"></span>
+          <span id="vLabel" class="vlabel">…</span>
+          <span id="vScore" class="vscore"></span>
+        </div>
+        <div id="vCounts" class="vcounts"></div>
+        <button id="show" class="ghost" type="button">Im Panel anzeigen</button>
+        <hr />
+      </section>
       <div class="row"><span>API-Key</span><span id="keyPill" class="pill">…</span></div>
       <div class="row"><span>Modell</span><span id="modelName">…</span></div>
       <div class="row"><span>Auto-Start</span><span id="autoPill" class="pill">…</span></div>

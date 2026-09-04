@@ -127,6 +127,19 @@ button { font: inherit; cursor: pointer; border-radius: 9px; }
   font-size: 12px;
 }
 
+.keys { display: flex; flex-direction: column; gap: 9px; margin-bottom: 14px; }
+.keys div { display: flex; align-items: center; gap: 5px; font-size: 12.5px; }
+.keys span { margin-left: 7px; color: var(--dim); }
+kbd {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--bg);
+  font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .bar {
   position: fixed;
   bottom: 0;
