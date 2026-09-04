@@ -193,8 +193,27 @@
     }
   }
 
+  const CATALOG_WORDS = [
+    'detailkatalog', 'kurzübersicht', 'detailedsalecatalogue', 'salecatalogue',
+    'auktionskatalog', 'fahrzeugkatalog'
+  ];
+
   function classify(el, url) {
-    // Wenn die URL direkt ViewPDF.aspx heißt, ist das die primäre BCA-Viewer-Seite -> Höchste Priorität!
+    const haystack = lower(
+      [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), el.className, url].join(' ')
+    ).slice(0, 400);
+
+    // Ausschließen von allgemeinen Auktions-Katalogen (Detailkatalog, Kurzübersicht etc.)
+    if (CATALOG_WORDS.some((w) => haystack.includes(w) || url.toLowerCase().includes(w))) {
+      return null;
+    }
+
+    // Wenn die URL direkt VehId enthält (z.B. ViewPDF.aspx?VehId=...), ist das exakt das Fahrzeug-PDF!
+    if (/VehId=/i.test(url)) {
+      return { kind: 'condition', score: 200, word: 'Fahrzeug PDF' };
+    }
+
+    // Wenn die URL direkt ViewPDF.aspx heißt, ist das die primäre BCA-Viewer-Seite
     if (/ViewPDF\.aspx/i.test(url)) {
       return { kind: 'condition', score: 150, word: 'ViewPDF' };
     }
@@ -202,10 +221,6 @@
     // Wenn die URL explizit ein Thumbnail-Bild ist (z.B. width=96), abwerten
     const isThumbnail = /([?&])(?:width|height)=[1-9]\d{0,2}\b/i.test(url) || /\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)/i.test(url);
     const scoreMod = isThumbnail ? -40 : 0;
-
-    const haystack = lower(
-      [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), el.className, url].join(' ')
-    ).slice(0, 400);
 
     for (const w of CONDITION_WORDS) if (haystack.includes(w)) return { kind: 'condition', score: 100 + scoreMod, word: w };
     for (const w of DATASHEET_WORDS) if (haystack.includes(w)) return { kind: 'datasheet', score: 70 + scoreMod, word: w };
@@ -451,6 +466,8 @@
 
       if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
         const html = new TextDecoder().decode(buf);
+        const snippet = html.replace(/\s+/g, ' ').slice(0, 200);
+        logDebug('HTML_PEEK', `HTML von ${cleanUrl.split('?')[0]} (${buf.byteLength} B): ${snippet}`);
         const nested = findPdfInHtml(html, res.url || cleanUrl);
         if (nested && nested !== cleanUrl && nested !== url) {
           logDebug('NESTED', `Gefundener PDF-Viewer-Link im HTML: ${nested}`);
@@ -458,15 +475,29 @@
         }
       }
       return null;
-    } catch {
+    } catch (err) {
+      logDebug('DOWNLOAD_ERR', `Fehler beim Tab-Download: ${err?.message || err}`);
       return null; // z.B. CORS -> Hintergrund versucht es erneut
     }
+  }
+
+  const NON_PDF_EXT = /\.(?:js|css|ico|svg|png|jpg|jpeg|gif|webp|woff|woff2|ttf|eot)(?:\?|$)/i;
+  const NON_PDF_PATH = /(?:javascript|functions\.js|jquery|analytics|google|doubleclick|\/css\/|\/fonts\/|\/images\/)/i;
+
+  function isProbablePdfUrl(urlStr) {
+    if (!urlStr) return false;
+    if (NON_PDF_EXT.test(urlStr) || NON_PDF_PATH.test(urlStr)) return false;
+    return (
+      /\.pdf(?:\?|$)/i.test(urlStr) ||
+      /(?:ShowPDF|GetPDF|ViewPDF|GetDoc|ShowDoc|PDFHandler|PdfViewer|DocumentViewer|FileDownload|download)/i.test(urlStr) ||
+      /(?:VehId|LotId|DocId|DocType)=/i.test(urlStr)
+    );
   }
 
   function findPdfInHtml(html, baseUrl) {
     if (!html) return null;
 
-    // 1. Suche nach iframe, embed, object oder frame (ohne .pdf Zwang – auf Viewer-Seiten ist jeder iframe das Dokument)
+    // 1. Suche nach iframe, embed, object oder frame
     const frameMatches = [
       ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
       ...html.matchAll(/<embed[^>]+src=["']([^"']+)["']/gi),
@@ -475,42 +506,47 @@
     ];
     for (const m of frameMatches) {
       const src = m[1]?.trim();
-      if (!src || src.startsWith('javascript:') || src.startsWith('about:') || /analytics|doubleclick|google/i.test(src)) continue;
+      if (!src || src.startsWith('javascript:') || src.startsWith('about:') || NON_PDF_EXT.test(src) || NON_PDF_PATH.test(src)) continue;
       try {
         const resolved = new URL(src, baseUrl).href;
-        if (resolved !== baseUrl) return resolved;
+        if (resolved !== baseUrl && isProbablePdfUrl(resolved)) return resolved;
+        if (resolved !== baseUrl && !NON_PDF_EXT.test(resolved) && !NON_PDF_PATH.test(resolved)) return resolved;
       } catch { /* ignore */ }
     }
 
     // 2. Suche nach Links zu Dokumenten, PDFs oder Download-Endpoints
     const linkMatches = [
-      ...html.matchAll(/<a[^>]+href=["']([^"']*(?:\.pdf|getdoc|getpdf|viewpdf|showpdf|document|attachment|download|stream)[^"']*)["']/gi),
-      ...html.matchAll(/["'](https?:\/\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|Download)[^"'\s<>]*)["']/gi),
-      ...html.matchAll(/["'](\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF)[^"'\s<>]*)["']/gi),
+      ...html.matchAll(/<a[^>]+href=["']([^"']+)["']/gi),
+      ...html.matchAll(/["'](https?:\/\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|Download|VehId=)[^"'\s<>]*)["']/gi),
+      ...html.matchAll(/["'](\/[^"'\s<>]+?(?:\.pdf|GetDoc|GetPDF|ShowPDF|ViewPDF|VehId=)[^"'\s<>]*)["']/gi),
       ...html.matchAll(/<meta[^>]+content=["'][^"']*?url=([^"'\s;]+)["']/gi)
     ];
     for (const m of linkMatches) {
       const target = m[1]?.trim();
-      if (!target) continue;
-      try {
-        const resolved = new URL(target, baseUrl).href;
-        if (resolved !== baseUrl) return resolved;
-      } catch { /* ignore */ }
+      if (!target || NON_PDF_EXT.test(target) || NON_PDF_PATH.test(target)) continue;
+      if (isProbablePdfUrl(target)) {
+        try {
+          const resolved = new URL(target, baseUrl).href;
+          if (resolved !== baseUrl) return resolved;
+        } catch { /* ignore */ }
+      }
     }
 
     // 3. JavaScript Weiterleitungen / Variablen
     const jsMatches = [
       ...html.matchAll(/(?:window\.location(?:\.href)?|location\.replace|location\.href)\s*=\s*["']([^"']+)["']/gi),
-      ...html.matchAll(/(?:url|pdfUrl|documentUrl|fileUrl|docUrl|source|src)\s*[:=]\s*["']([^"']+)["']/gi),
+      ...html.matchAll(/(?:pdfUrl|documentUrl|fileUrl|docUrl|reportUrl)\s*[:=]\s*["']([^"']+)["']/gi),
       ...html.matchAll(/window\.open\s*\(\s*["']([^"']+)["']/gi)
     ];
     for (const m of jsMatches) {
       const target = m[1]?.trim();
-      if (!target || target.startsWith('javascript:') || target.length < 4) continue;
-      try {
-        const resolved = new URL(target, baseUrl).href;
-        if (resolved !== baseUrl) return resolved;
-      } catch { /* ignore */ }
+      if (!target || target.startsWith('javascript:') || NON_PDF_EXT.test(target) || NON_PDF_PATH.test(target)) continue;
+      if (isProbablePdfUrl(target)) {
+        try {
+          const resolved = new URL(target, baseUrl).href;
+          if (resolved !== baseUrl) return resolved;
+        } catch { /* ignore */ }
+      }
     }
 
     // 4. BCA-Spezialfall: Wenn die Seite ViewPDF.aspx heißt und keine URL gefunden wurde, versuche ShowPDF.aspx
