@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autosmaya – Einstellungen</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="hero">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 13l1.5-4.5A2 2 0 0 1 8.4 7h7.2a2 2 0 0 1 1.9 1.5L19 13" />
+            <path d="M3 13h18v4a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+            <circle cx="7.5" cy="15.5" r=".8" fill="currentColor" />
+            <circle cx="16.5" cy="15.5" r=".8" fill="currentColor" />
+          </svg>
+        </div>
+        <div>
+          <h1>Autosmaya</h1>
+          <p>Liest auf <code>de.bca-europe.com</code> den Zustandsbericht automatisch aus,
+            listet alle Mängel, rechnet die Kosten und gibt eine Kaufempfehlung.</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>OpenRouter</h2>
+        <label class="field">
+          <span class="label">API-Key</span>
+          <div class="key-row">
+            <input id="apiKey" type="password" placeholder="sk-or-v1-..." autocomplete="off" spellcheck="false" />
+            <button id="toggleKey" class="ghost" type="button">Zeigen</button>
+            <button id="testKey" class="ghost" type="button">Testen</button>
+          </div>
+          <small
+            >Key erstellen auf
+            <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>. Der Key
+            bleibt lokal im Browser.</small
+          >
+          <div id="keyStatus" class="status" hidden></div>
+        </label>
+
+        <label class="field">
+          <span class="label">API-Endpunkt (nur ändern, wenn du einen eigenen Proxy nutzt)</span>
+          <input id="apiBase" type="text" spellcheck="false" placeholder="https://openrouter.ai/api/v1" />
+        </label>
+
+        <label class="field">
+          <span class="label">Modell für Text-PDFs</span>
+          <input id="model" list="modelList" spellcheck="false" autocomplete="off"
+            placeholder="amazon/nova-2-lite-v1" />
+          <small id="modelPrice"></small>
+        </label>
+
+        <label class="field">
+          <span class="label">Modell für gescannte PDFs (Bilderkennung)</span>
+          <input id="visionModel" list="modelList" spellcheck="false" autocomplete="off"
+            placeholder="amazon/nova-2-lite-v1" />
+          <small>Wird nur genutzt, wenn im PDF kein Text steckt. Bilder kosten deutlich mehr Tokens.</small>
+        </label>
+        <datalist id="modelList"></datalist>
+      </section>
+
+      <section class="card">
+        <h2>Verhalten</h2>
+        <label class="switch-row">
+          <input id="autoRun" type="checkbox" />
+          <span><strong>Automatisch starten</strong><small>Analyse startet, sobald eine Fahrzeugseite erkannt wird.</small></span>
+        </label>
+        <label class="switch-row">
+          <input id="visionFallback" type="checkbox" />
+          <span><strong>Gescannte PDFs per Bilderkennung lesen</strong><small>Greift bei reinen Scans und
+            zusätzlich für einzelne Seiten ohne Textebene (z.&nbsp;B. Schadensskizzen).</small></span>
+        </label>
+        <label class="switch-row">
+          <input id="markLinks" type="checkbox" />
+          <span><strong>Gefundene Links auf der Seite markieren</strong><small>Zeigt mit einem farbigen
+            Rahmen, welche Dokumente ausgewertet werden.</small></span>
+        </label>
+        <label class="switch-row">
+          <input id="cacheEnabled" type="checkbox" />
+          <span><strong>Ergebnisse zwischenspeichern</strong><small>Gleiches PDF wird nie zweimal bezahlt.</small></span>
+        </label>
+
+        <div class="grid2">
+          <label class="field">
+            <span class="label">Max. Seiten bei Bilderkennung</span>
+            <input id="visionMaxPages" type="number" min="1" max="20" />
+          </label>
+          <label class="field">
+            <span class="label">Zeichen pro KI-Aufruf</span>
+            <input id="maxChars" type="number" min="20000" max="400000" step="10000" />
+          </label>
+        </div>
+
+        <p class="hint">Längere Dokumente werden automatisch in Teilen ausgewertet und danach
+          zusammengeführt – es geht kein Text verloren, egal wie lang der Bericht ist.</p>
+
+        <label class="field">
+          <span class="label">Sprache der Ausgabe</span>
+          <select id="outputLanguage">
+            <option value="de">Deutsch</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Wo Autosmaya arbeitet</h2>
+        <p class="hint">Autosmaya kann ausschließlich auf <code>de.bca-europe.com</code> laufen –
+          das steht fest im Manifest und lässt sich hier nicht ausweiten. Die Liste unten
+          schränkt zusätzlich auf die Fahrzeugseiten ein. Auf allen anderen Adressen wird
+          weder die Seite gelesen noch ein PDF geladen.</p>
+        <label class="field">
+          <span class="label">Erlaubte Adressen (eine pro Zeile)</span>
+          <textarea id="urlPrefixes" rows="3" spellcheck="false"></textarea>
+          <small>Endet ein Eintrag auf <code>?name</code>, muss dieser Parameter in der Adresse
+            vorkommen – Reihenfolge egal.</small>
+        </label>
+        <label class="field">
+          <span class="label">Zusätzliche Link-Stichwörter (eine pro Zeile)</span>
+          <textarea id="keywords" rows="4"></textarea>
+          <small>Nur nötig für ungewöhnliche Bezeichnungen. Appraisal, Fahrzeug PDF,
+            Zustandsbericht, Schadenaufstellung &amp; Co. erkennt Autosmaya bereits von selbst.</small>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Tastenkürzel</h2>
+        <div class="keys">
+          <div><kbd>Alt</kbd><kbd>Shift</kbd><kbd>M</kbd><span>Panel ein-/ausblenden</span></div>
+          <div><kbd>Alt</kbd><kbd>Shift</kbd><kbd>A</kbd><span>Seite jetzt prüfen</span></div>
+          <div><kbd>Esc</kbd><span>Panel einklappen</span></div>
+        </div>
+        <button id="shortcuts" class="ghost" type="button">Kürzel in Chrome ändern</button>
+      </section>
+
+      <section class="card">
+        <h2>Cache</h2>
+        <p id="cacheStats" class="muted">wird geladen…</p>
+        <button id="clearCache" class="ghost" type="button">Cache leeren</button>
+      </section>
+    </main>
+
+    <footer class="bar">
+      <span id="saveStatus" class="muted"></span>
+      <button id="save" class="primary" type="button">Speichern</button>
+    </footer>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

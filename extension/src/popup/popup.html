@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <title>Autosmaya</title>
+    <style>
+      :root {
+        --bg: #fff; --soft: #f5f6f8; --border: #e3e5ea; --text: #14161a;
+        --dim: #6b7280; --accent: #2563eb; --ok: #16a34a; --err: #dc2626;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #16181d; --soft: #1e2128; --border: #2b2f38; --text: #eceef2;
+                --dim: #99a1af; --accent: #60a5fa; --ok: #4ade80; --err: #f87171; }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; width: 288px; background: var(--bg); color: var(--text);
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      header { display: flex; align-items: center; gap: 9px; padding: 13px 14px; border-bottom: 1px solid var(--border); }
+      .logo { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #fff; }
+      h1 { margin: 0; font-size: 13.5px; }
+      main { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 9px; }
+      button { font: inherit; cursor: pointer; border-radius: 9px; padding: 9px; }
+      .primary { background: var(--accent); color: #fff; border: none; font-weight: 600; }
+      .primary:hover { filter: brightness(1.08); }
+      .primary:disabled { opacity: .55; cursor: not-allowed; }
+      .ghost { background: transparent; border: 1px solid var(--border); color: var(--dim); }
+      .ghost:hover { background: var(--soft); color: var(--text); }
+      .row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--dim); }
+      .pill { font-size: 11px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--soft); }
+      .pill.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+      .pill.err { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+      .msg { font-size: 11.5px; color: var(--dim); min-height: 15px; }
+      hr { border: none; border-top: 1px solid var(--border); margin: 3px 0 1px; }
+      .verdict { display: flex; align-items: center; gap: 7px; }
+      .vdot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+      .vlabel { font-weight: 700; font-size: 14px; }
+      .vscore {
+        margin-left: auto; font-weight: 700; font-size: 12px;
+        padding: 2px 8px; border-radius: 999px; background: var(--soft);
+      }
+      .vcounts { font-size: 11.5px; color: var(--dim); margin: -2px 0 2px; }
+      .good { color: #16a34a; } .ok { color: #2563eb; }
+      .warn { color: #d97706; } .bad { color: #dc2626; } .muted { color: var(--dim); }
+      .vdot.good { background: #16a34a; } .vdot.ok { background: #2563eb; }
+      .vdot.warn { background: #d97706; } .vdot.bad { background: #dc2626; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 13l1.5-4.5A2 2 0 0 1 8.4 7h7.2a2 2 0 0 1 1.9 1.5L19 13" />
+          <path d="M3 13h18v4a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H6v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" />
+        </svg>
+      </div>
+      <h1>Autosmaya</h1>
+    </header>
+    <main>
+      <section id="result" hidden>
+        <div class="verdict">
+          <span id="vDot" class="vdot"></span>
+          <span id="vLabel" class="vlabel">…</span>
+          <span id="vScore" class="vscore"></span>
+        </div>
+        <div id="vCounts" class="vcounts"></div>
+        <button id="show" class="ghost" type="button">Im Panel anzeigen</button>
+        <hr />
+      </section>
+      <div class="row"><span>API-Key</span><span id="keyPill" class="pill">…</span></div>
+      <div class="row"><span>Modell</span><span id="modelName">…</span></div>
+      <div class="row"><span>Auto-Start</span><span id="autoPill" class="pill">…</span></div>
+      <button id="run" class="primary" type="button">Diese Seite prüfen</button>
+      <button id="options" class="ghost" type="button">Einstellungen</button>
+      <div id="msg" class="msg"></div>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

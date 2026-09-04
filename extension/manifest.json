@@ -1,0 +1,76 @@
+{
+  "manifest_version": 3,
+  "name": "Autosmaya",
+  "short_name": "Autosmaya",
+  "version": "1.2.0",
+  "description": "Liest auf de.bca-europe.com den Zustandsbericht automatisch aus, listet alle Mängel, rechnet die Kosten und gibt eine Kaufempfehlung.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage",
+    "offscreen",
+    "unlimitedStorage"
+  ],
+  "host_permissions": [
+    "https://de.bca-europe.com/*",
+    "https://*.bca-europe.com/*",
+    "https://openrouter.ai/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://de.bca-europe.com/*"
+      ],
+      "js": [
+        "src/content/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "options_page": "src/options/options.html",
+  "action": {
+    "default_title": "Autosmaya – Fahrzeug prüfen",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/content/panel.css",
+        "icons/*"
+      ],
+      "matches": [
+        "https://de.bca-europe.com/*"
+      ]
+    }
+  ],
+  "commands": {
+    "toggle-panel": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Autosmaya-Panel ein-/ausblenden"
+    },
+    "analyze-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Aktuelle Seite jetzt prüfen"
+    }
+  }
+}
