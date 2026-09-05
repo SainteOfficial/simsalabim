@@ -284,6 +284,7 @@ extension/
 test/
   e2e.mjs                  End-to-End-Test mit echtem Chromium
   chat.mjs                 Chat: Kontext, Verlaufsdeckel, Freitext-Antwort
+  dist-current.mjs         wacht darüber, dass dist/ zum Quellcode passt
   bca-viewpdf.mjs          Dokumentenabruf über zwei Origins (BCA-Topologie)
   tabs-sparse.mjs          Berechnet/Meinung bei dünner Datenlage
   make-fixtures.py         erzeugt die Test-PDFs neu
@@ -294,15 +295,21 @@ test/
 
 Die Extension wird gebaut: React, TypeScript und Tailwind brauchen einen Build-Schritt.
 
+In Chrome unter `chrome://extensions` → **Entwicklermodus** an → **Entpackte Erweiterung
+laden** → den Ordner `extension/` wählen. Das funktioniert direkt nach dem Herunterladen,
+auch ohne Node: `extension/dist/` ist eingecheckt.
+
+Wer am Code arbeitet, braucht den Build:
+
 ```bash
 npm install
-npm run build      # erzeugt extension/dist/
+npm run build      # schreibt extension/dist/
 npm run dev        # dasselbe im Watch-Modus
 ```
 
-Danach in Chrome unter `chrome://extensions` → **Entpackte Erweiterung laden** den Ordner
-`extension/` wählen. `extension/dist/` ist nicht eingecheckt – ohne `npm run build` fehlt der
-Extension ihr Code.
+**Nach jeder Änderung am Quellcode muss `extension/dist/` neu gebaut und mit eingecheckt
+werden** – sonst lädt ein Download still den alten Stand. `test/dist-current.mjs` baut neu
+und vergleicht; weicht etwas ab, schlägt der Test fehl und nennt die Datei.
 
 Warum kein Dev-Server mit HMR: MV3 verbietet `unsafe-eval`, und genau das braucht Vites
 HMR-Laufzeit. `npm run dev` baut deshalb bei jeder Änderung neu; in Chrome reicht dann ein
@@ -354,6 +361,7 @@ npm test        # baut die Extension und lässt alle vier Suiten laufen
 Einzeln geht auch, nach einem `npm run build`:
 
 ```bash
+node test/dist-current.mjs
 node test/e2e.mjs
 node test/bca-viewpdf.mjs
 node test/tabs-sparse.mjs
