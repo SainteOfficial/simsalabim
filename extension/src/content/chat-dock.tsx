@@ -55,12 +55,9 @@ export function ChatDock() {
   if (!panel || panel.status !== 'done') return null;
 
   return (
-    <div className="vms-app px-3 pb-3 pt-1">
+    <div className="vms-app border-t border-panel-line px-1.5 pb-1 pt-1">
       {turns.length > 0 && (
-        <div
-          className="mb-2 max-h-56 space-y-2 overflow-y-auto pr-1"
-          ref={scrollRef}
-        >
+        <div className="mb-1 max-h-56 space-y-2 overflow-y-auto px-2 pt-2" ref={scrollRef}>
           <AnimatePresence initial={false}>
             {turns.map((turn, i) => (
               <motion.div
@@ -95,7 +92,7 @@ export function ChatDock() {
         workingStatus="Sucht im Dokument …"
       />
 
-      {error && <p className="mt-2 px-1 text-[11px] text-panel-crit">{error}</p>}
+      {error && <p className="mb-1 px-3 text-[11px] text-panel-crit">{error}</p>}
     </div>
   );
 }

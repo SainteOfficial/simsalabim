@@ -267,8 +267,9 @@ extension/
       agent-dock.tsx       Chat-Leiste
     content/main.tsx       Einstiegspunkt: Panel-Rahmen + React
     content/panel.js       Rahmen: Kopf, Tab-Leiste, Fuß, Ziehen, Größe
-    content/panel-body.tsx Inhalt der Tabs (React)
+    content/panel-body.tsx Inhalt des Panels (React)
     content/tabs/          Mängel, Berechnet, Meinung, Icons
+    content/views/         Start, Laden, Fehler, Diagnose
     content/chat-dock.tsx  Chat zum Dokument
     content/bridge.ts      Brücke zwischen Panel und React
     styles/tailwind.css    Tailwind-Einstieg
@@ -320,15 +321,28 @@ und Chatverlauf bleiben stehen. Zustand, der das Panel als Ganzes betrifft, flie
 `content/bridge.ts` zu React; was nur die Tabs angeht (Filter, Suche, Sortierung), gehört
 React allein.
 
-Noch nicht portiert sind die Diagnose-Ansicht und die Zustände vor dem Ergebnis (Laden,
-Fehler, Startbildschirm). Sie kommen weiterhin als HTML aus `panel.js` und werden von React
-eingehängt – eine klar abgegrenzte Naht, kein Dauerzustand.
-
 Tailwind läuft mit abgeschaltetem Preflight: das Panel lebt in einem Shadow-DOM, in dem es
 kein `html`/`body` gibt, auf das Preflight zielen könnte. Die Basiswerte setzt stattdessen
 `.vms-app` in `extension/src/styles/tailwind.css`. Das kompilierte CSS wird als Text ins
 Bundle gezogen (`?inline`) und in den Shadow-Root gehängt – von außen greift dort kein
 Stylesheet.
+
+Drei Stolpersteine, die dieser Aufbau mitbringt und die in den Dateien auch so kommentiert
+sind:
+
+- Die Basisregeln stehen in `@layer base`, also **vor** den Utilities. Am Dateiende würden
+  sie diese überschreiben – Knöpfe blieben dann ohne Hintergrund.
+- Sie stehen zusätzlich in `:where()`, damit `.vms-app button` (0,1,1) nicht schwerer wiegt
+  als eine Utility wie `bg-panel-accent` (0,1,0).
+- Ohne Preflight fehlt `border-style: solid`. Ohne das bleibt **jede** `border`-Utility
+  wirkungslos, weil `border-style` von Haus aus `none` ist.
+
+Die Farben kommen aus denselben Tokens, die `panel.css` auf `.vms-root` setzt (`--accent`,
+`--text`, …). Sie sind in `tailwind.config.js` als Funktion hinterlegt, damit auch
+`bg-panel-accent/12` funktioniert: bei einer nackten `var()`-Farbe kann Tailwind keinen
+Alphakanal einrechnen und lässt den Modifier stillschweigend fallen. `color-mix` löst das.
+Für Text auf Akzentflächen gibt es `--on-accent`; im dunklen Thema ist `--accent` ein helles
+Blau, auf dem Weiß nur rund 2,3:1 Kontrast bringt.
 
 ## Tests
 

@@ -1166,8 +1166,18 @@
       context: state.context,
       pageDamages: state.pageDamages,
       showAllPageDamages: state.showAllPageDamages,
-      docs: state.docs.map((d) => ({ url: d.url, label: d.label })),
-      result: state.result
+      docs: state.docs.map((d) => ({ url: d.url, label: d.label, kind: d.kind })),
+      result: state.result,
+      steps: state.steps,
+      progressPct: state.progressPct,
+      error: state.error,
+      debugLogs: state.debugLogs,
+      apiDiagnosis: state.apiDiagnosis,
+      pdfDiagnosis: state.pdfDiagnosis,
+      isDiagnosingApi: state.isDiagnosingApi,
+      isDiagnosingPdf: state.isDiagnosingPdf,
+      href: location.href,
+      path: location.pathname + location.search
     };
   }
 
@@ -1198,25 +1208,11 @@
       slot: ui.slot,
       body: ui.body,
       state: next,
-      legacyBody,
       morphFrom
     };
     if (!force && signature === lastPublished) return;
     lastPublished = signature;
     document.dispatchEvent(new CustomEvent('vms:state', { detail: next }));
-  }
-
-  /**
-   * Die Ansichten, die noch nicht als Komponente vorliegen: Diagnose sowie
-   * alles vor dem fertigen Ergebnis. React hängt das HTML unverändert ein, die
-   * Klickziele darin bedient weiterhin der Delegat in onClick().
-   */
-  function legacyBody() {
-    if (state.view === 'debug') return debugBody();
-    if (state.status === 'busy') return busyBody();
-    if (state.status === 'error') return errorBody();
-    if (state.status !== 'done') return idleBody();
-    return '';
   }
 
   function render() {
@@ -1234,6 +1230,7 @@
         ? ''
         : tabBar() +
           '<div class="vms-body-anchor"></div>' +
+          '<div class="vms-chat-anchor"></div>' +
           footer() +
           '<div class="vms-resize" title="Größe ändern" aria-hidden="true"></div>');
 
@@ -1242,7 +1239,9 @@
     if (!state.collapsed) {
       ui.body.dataset.tab = state.tab;
       root.querySelector('.vms-body-anchor')?.replaceWith(ui.body);
-      root.appendChild(ui.slot);
+      // Der Chat sitzt zwischen Inhalt und Fuß, nicht darunter: als eigene
+      // schwebende Karte unter dem Panel las er sich wie ein zweites Fenster.
+      root.querySelector('.vms-chat-anchor')?.replaceWith(ui.slot);
     }
     publishState();
 
@@ -1352,158 +1351,6 @@
   }
 
   /* -------------------------------------------------------------- Inhalte */
-
-  function debugBody() {
-    const doc = state.docs[0];
-    const docUrl = doc?.url || 'Kein Dokument erkannt';
-    const lastErr = state.error?.message || 'Kein Fehler protokolliert';
-    const apiDiag = state.apiDiagnosis;
-    const pdfDiag = state.pdfDiagnosis;
-
-    return `
-      <div class="vms-debug-view">
-        <div class="vms-debug-head">
-          <div class="vms-debug-title">
-            <span class="vms-debug-icon">${debugIcon()}</span>
-            <strong>Diagnose & Systemstatus</strong>
-          </div>
-          <button class="vms-ghost sm" data-act="close-debug">← Zurück</button>
-        </div>
-
-        <div class="vms-debug-card">
-          <div class="vms-debug-row">
-            <span class="vms-debug-label">Aktuelle Seite:</span>
-            <span class="vms-debug-val" title="${esc(location.href)}">${esc(location.pathname + location.search)}</span>
-          </div>
-          <div class="vms-debug-row">
-            <span class="vms-debug-label">Fahrzeug FIN:</span>
-            <span class="vms-debug-val">${esc(state.context?.vin || 'Nicht im DOM gefunden')}</span>
-          </div>
-          <div class="vms-debug-row">
-            <span class="vms-debug-label">PDF-Link:</span>
-            <span class="vms-debug-val mono" title="${esc(docUrl)}">${esc(docUrl)}</span>
-          </div>
-          <div class="vms-debug-row">
-            <span class="vms-debug-label">Letzter Fehler:</span>
-            <span class="vms-debug-val ${state.error ? 'err' : ''}">${esc(lastErr)}</span>
-          </div>
-        </div>
-
-        <div class="vms-debug-actions">
-          <button class="vms-ghost sm" data-act="test-api">
-            ${state.isDiagnosingApi ? '<span class="vms-spin"></span>' : '⚡'} API testen
-          </button>
-          <button class="vms-ghost sm" data-act="test-pdf">
-            ${state.isDiagnosingPdf ? '<span class="vms-spin"></span>' : '📥'} PDF-Download testen
-          </button>
-          <button class="vms-ghost sm" data-act="copy-debug">📋 Report kopieren</button>
-        </div>
-
-        ${apiDiag ? `
-          <div class="vms-diag-box ${apiDiag.ok ? 'ok' : 'bad'}">
-            <strong>API-Verbindungstest (${apiDiag.durationMs}ms):</strong>
-            ${apiDiag.ok
-              ? `<div>Erfolgreich! Modell <code>${esc(apiDiag.model)}</code> antwortet ordnungsgemäß.</div>`
-              : `<div>Fehler: ${esc(apiDiag.error)}</div>`}
-          </div>` : ''}
-
-        ${pdfDiag ? `
-          <div class="vms-diag-box ${pdfDiag.ok && pdfDiag.isPdf ? 'ok' : 'bad'}">
-            <strong>PDF-Download-Test (${pdfDiag.durationMs}ms):</strong>
-            ${pdfDiag.ok
-              ? `<div>Status: HTTP ${pdfDiag.status} | Content-Type: ${esc(pdfDiag.contentType || 'keiner')}</div>
-                 <div>Ergebnis: ${pdfDiag.isPdf ? ' Gültiges PDF (%PDF- Signatur vorhanden)' : '⚠️ Antwort ist kein PDF!'} (${Math.round((pdfDiag.bytesReceived || 0)/1024)} KB)</div>
-                 ${pdfDiag.nestedPdfUrl ? `<div>Gefundener Link im HTML: <code>${esc(pdfDiag.nestedPdfUrl)}</code></div>` : ''}
-                 ${pdfDiag.preview ? `<pre class="vms-debug-pre">${esc(pdfDiag.preview)}</pre>` : ''}`
-              : `<div>Fehler: ${esc(pdfDiag.error)}</div>`}
-          </div>` : ''}
-
-        <div class="vms-debug-log-head">
-          <span>Ereignis-Protokoll (${state.debugLogs.length})</span>
-        </div>
-        <div class="vms-debug-log">
-          ${state.debugLogs.length === 0
-            ? '<div class="vms-debug-empty">Noch keine Log-Ereignisse aufgezeichnet.</div>'
-            : state.debugLogs
-                .slice()
-                .reverse()
-                .map(
-                  (l) => `<div class="vms-debug-entry">
-                     <span class="vms-debug-time">${esc(l.time)}</span>
-                     <span class="vms-debug-tag ${esc((l.tag || '').toLowerCase())}">[${esc(l.tag)}]</span>
-                     <span class="vms-debug-msg">${esc(l.message)}</span>
-                   </div>`
-                )
-                .join('')}
-        </div>
-      </div>`;
-  }
-
-  /**
-   * Schäden, die schon auf der Seite stehen. Wird von den noch nicht
-   * portierten Ansichten gebraucht; im Mängel-Tab rendert React sie selbst.
-   */
-  function pageDamageBlock() {
-    if (!state.pageDamages.length) return '';
-    const shown = state.pageDamages.slice(0, state.showAllPageDamages ? 25 : 5);
-    return `
-      <section class="vms-onpage">
-        <div class="vms-onpage-head">${eyeIcon()}<strong>Direkt von der Seite</strong>
-          <span class="vms-onpage-count">${state.pageDamages.length}</span></div>
-        <ul>${shown.map((t, i) => `<li style="--i:${i}">${esc(t)}</li>`).join('')}</ul>
-        ${state.pageDamages.length > shown.length
-          ? `<button class="vms-link" data-act="more-onpage">alle ${state.pageDamages.length} anzeigen</button>`
-          : ''}
-      </section>`;
-  }
-
-  function idleBody() {
-    return `
-      ${pageDamageBlock()}
-      <div class="vms-docs">
-        ${state.docs
-          .map(
-            (d, i) => `<div class="vms-doc" style="--i:${i}"><span class="vms-dot ${d.kind}"></span>
-              <span class="vms-doc-label">${esc(d.label)}</span>
-              <button class="vms-link" data-act="open-doc" data-url="${esc(d.url)}">öffnen</button></div>`
-          )
-          .join('')}
-      </div>
-      <button class="vms-primary" data-act="run">${searchIcon()}<span>Mängel prüfen</span></button>`;
-  }
-
-  function busyBody() {
-    const steps = state.steps
-      .map(
-        (s, i) => `<li class="${s.done ? 'done' : 'active'}" style="--i:${i}">
-             <span class="vms-step-icon">${s.done ? checkIcon() : '<span class="vms-spin"></span>'}</span>
-             <span class="vms-step-label">${esc(s.label)}</span>
-             ${s.hint ? `<span class="vms-step-hint">${esc(s.hint)}</span>` : ''}
-           </li>`
-      )
-      .join('');
-    const pct = state.progressPct;
-    return `
-      ${pageDamageBlock()}
-      <div class="vms-progress">
-        <div class="vms-progress-bar ${pct === null ? 'indeterminate' : ''}" ${pct !== null ? `style="width:${pct}%"` : ''}></div>
-      </div>
-      <ul class="vms-steps">${steps}</ul>`;
-  }
-
-  function errorBody() {
-    const noKey = state.error?.code === 'NO_API_KEY';
-    return `
-      ${pageDamageBlock()}
-      <div class="vms-error">${alertIcon()}<span>${esc(state.error?.message || 'Unbekannter Fehler')}</span></div>
-      <div class="vms-row">
-        ${noKey
-          ? '<button class="vms-primary" data-act="options"><span>API-Key eintragen</span></button>'
-          : '<button class="vms-primary" data-act="rerun"><span>Erneut versuchen</span></button>'}
-        <button class="vms-ghost" data-act="open-debug"><span>🔍 Debug / Diagnose</span></button>
-        ${noKey ? '' : '<button class="vms-ghost" data-act="options">Einstellungen</button>'}
-      </div>`;
-  }
 
   /* ---------------------------------------------------------------- Fuß */
 

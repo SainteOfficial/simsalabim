@@ -20,8 +20,40 @@ export type PanelState = {
   context: Record<string, string>;
   pageDamages: string[];
   showAllPageDamages: boolean;
-  docs: { url?: string; label?: string }[];
+  docs: { url?: string; label?: string; kind?: string }[];
   result: AnalysisResult | null;
+  steps: Step[];
+  progressPct: number | null;
+  error: { message: string; code?: string } | null;
+  debugLogs: LogEntry[];
+  apiDiagnosis: ApiDiagnosis | null;
+  pdfDiagnosis: PdfDiagnosis | null;
+  isDiagnosingApi: boolean;
+  isDiagnosingPdf: boolean;
+  href: string;
+  path: string;
+};
+
+export type Step = { key: string; label: string; done: boolean; hint?: string };
+export type LogEntry = { time: string; tag: string; message: string };
+
+export type ApiDiagnosis = {
+  ok: boolean;
+  model?: string;
+  error?: string;
+  durationMs?: number;
+};
+
+export type PdfDiagnosis = {
+  ok: boolean;
+  error?: string;
+  status?: number;
+  contentType?: string;
+  bytesReceived?: number;
+  isPdf?: boolean;
+  nestedPdfUrl?: string | null;
+  preview?: string;
+  durationMs?: number;
 };
 
 export const PANEL_EVENT = 'vms:state';
@@ -32,8 +64,6 @@ type Bridge = {
   slot: HTMLElement;
   body: HTMLElement;
   state: PanelState;
-  /** HTML der noch nicht portierten Ansichten (Diagnose, Laden, Fehler). */
-  legacyBody: () => string;
   /** Höhe von .vms-body im Moment des Tabwechsels, für den Übergang. */
   morphFrom: number;
 };
@@ -61,14 +91,6 @@ export function panelSlot(): HTMLElement | null {
 
 export function panelBody(): HTMLElement | null {
   return bridge()?.body ?? null;
-}
-
-export function legacyBody(): string {
-  try {
-    return bridge()?.legacyBody() ?? '';
-  } catch {
-    return '';
-  }
 }
 
 export function morphFrom(): number {

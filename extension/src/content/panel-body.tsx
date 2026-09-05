@@ -3,7 +3,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CalcTab } from '@/content/tabs/calc-tab';
 import { DefectTab } from '@/content/tabs/defect-tab';
 import { OpinionTab } from '@/content/tabs/opinion-tab';
-import { onPanelState, legacyBody, morphFrom, type PanelState } from '@/content/bridge';
+import { onPanelState, morphFrom, type PanelState } from '@/content/bridge';
+import { BusyView } from '@/content/views/busy-view';
+import { DebugView } from '@/content/views/debug-view';
+import { ErrorView } from '@/content/views/error-view';
+import { IdleView } from '@/content/views/idle-view';
 
 /**
  * Der Inhalt von .vms-body. Das Panel drumherum (Kopf, Tab-Leiste, Fuß) liegt
@@ -23,12 +27,10 @@ export function PanelBody({ bodyEl }: { bodyEl: HTMLElement }) {
 
   if (!panel) return null;
 
-  // Noch nicht portiert: Diagnose-Ansicht sowie die Zustände vor dem Ergebnis.
-  // Sie kommen weiter als HTML aus panel.js; die Klickziele darin bedient
-  // dessen Delegat unverändert.
-  if (panel.view === 'debug' || panel.status !== 'done' || !panel.result) {
-    return <div dangerouslySetInnerHTML={{ __html: legacyBody() }} />;
-  }
+  if (panel.view === 'debug') return <DebugView panel={panel} />;
+  if (panel.status === 'busy') return <BusyView panel={panel} />;
+  if (panel.status === 'error') return <ErrorView panel={panel} />;
+  if (panel.status !== 'done' || !panel.result) return <IdleView panel={panel} />;
 
   const r = panel.result;
   const docs = r.meta?.coverage?.documents || [];

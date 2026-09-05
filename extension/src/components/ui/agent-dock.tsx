@@ -102,7 +102,7 @@ export function AgentDock({
 
   return (
     <form className={cn("vms-app", className)} onSubmit={handleSubmit}>
-      <div className="flex w-full flex-col-reverse overflow-hidden rounded-2xl border border-panel-line bg-panel-card p-2 shadow-lg">
+      <div className="flex w-full flex-col-reverse overflow-hidden p-2">
         <div className="flex items-center gap-3">
           {avatarSrc ? (
             <img

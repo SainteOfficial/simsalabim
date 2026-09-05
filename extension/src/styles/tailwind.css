@@ -1,37 +1,83 @@
 @tailwind base;
-@tailwind components;
-@tailwind utilities;
 
 /*
  * Preflight ist abgeschaltet (siehe tailwind.config.js): im Shadow-DOM gibt es
  * kein html/body, auf das es zielen könnte. Die Basiswerte setzt deshalb der
  * Wurzelknoten der React-Insel selbst.
+ *
+ * Zwei Dinge sind hier wichtig, sonst bleiben Utilities wirkungslos:
+ *  - Die Regeln stehen in @layer base, also VOR den Utilities. Am Dateiende
+ *    würden sie diese sonst überschreiben.
+ *  - Die Element-Regeln stehen in :where(), damit ".vms-app button" (0,1,1)
+ *    nicht schwerer wiegt als eine Utility wie "bg-panel-accent" (0,1,0).
  */
-.vms-app {
-  color: var(--vms-text);
-  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  box-sizing: border-box;
+@layer base {
+  .vms-app {
+    color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    box-sizing: border-box;
+  }
+
+  .vms-app :where(*, *::before, *::after) {
+    box-sizing: border-box;
+    /*
+     * Ohne Preflight fehlt genau das hier - und ohne border-style bleibt jede
+     * border-Utility wirkungslos, weil border-style von Haus aus "none" ist.
+     */
+    border-width: 0;
+    border-style: solid;
+    border-color: var(--border);
+  }
+
+  .vms-app :where(button) {
+    font: inherit;
+    color: inherit;
+    background: none;
+    cursor: pointer;
+  }
+
+  .vms-app :where(textarea, input, select) {
+    font: inherit;
+    color: inherit;
+  }
+
+  .vms-app :where(p, ul, ol, li, figure, blockquote, pre) {
+    margin: 0;
+    padding: 0;
+  }
+
+  .vms-app :where(ul, ol) {
+    list-style: none;
+  }
+
+  .vms-app :where(code, pre) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
 }
-.vms-app *,
-.vms-app *::before,
-.vms-app *::after {
-  box-sizing: inherit;
+
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  /* Unbestimmter Fortschritt: läuft, solange keine Seitenzahl bekannt ist. */
+  .vms-indeterminate {
+    animation: vms-slide 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .vms-indeterminate {
+      animation: none;
+    }
+  }
 }
-.vms-app button {
-  font: inherit;
-  color: inherit;
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.vms-app textarea {
-  font: inherit;
-  color: inherit;
-}
-.vms-app p,
-.vms-app ul,
-.vms-app li {
-  margin: 0;
-  padding: 0;
+
+@keyframes vms-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
 }
