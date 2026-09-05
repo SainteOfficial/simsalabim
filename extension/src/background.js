@@ -552,6 +552,16 @@ function mergeDefects(lists) {
 
 const RECOMMENDATIONS = ['kaufen', 'kaufen_mit_vorbehalt', 'nachverhandeln', 'finger_weg', 'unklar'];
 
+// Fällt die Überschrift des Modells leer aus, steht wenigstens der Befund da,
+// statt einer nackten Vokabel ohne Satz.
+const FALLBACK_HEADLINE = {
+  kaufen: 'Im Dokument stehen keine Befunde, die gegen den Kauf sprechen.',
+  kaufen_mit_vorbehalt: 'Kleinere dokumentierte Mängel - kalkulierbar, aber einplanen.',
+  nachverhandeln: 'Deutliche dokumentierte Mängel - der Preis sollte das abbilden.',
+  finger_weg: 'Schwere oder sicherheitskritische Befunde im Dokument.',
+  unklar: 'Für ein Urteil reichen die Angaben im Dokument nicht aus.'
+};
+
 function normalizeVerdict(v) {
   if (!v || !RECOMMENDATIONS.includes(v.recommendation)) {
     return {
@@ -570,11 +580,14 @@ function normalizeVerdict(v) {
 
   let score = Number.isFinite(v.score) ? Math.round(v.score) : null;
   if (score !== null) score = Math.min(100, Math.max(0, score));
+  // Bei "unklar" ist jeder Score irreführend: eine 0 liest sich wie Totalschaden,
+  // obwohl gerade die Datenlage fehlt. Das Panel zeigt dann bewusst keinen Ring.
+  if (v.recommendation === 'unklar') score = null;
 
   return {
     recommendation: v.recommendation,
     score,
-    headline: String(v.headline || '').slice(0, 240),
+    headline: String(v.headline || '').slice(0, 240) || FALLBACK_HEADLINE[v.recommendation] || '',
     reasons: (Array.isArray(v.reasons) ? v.reasons : []).slice(0, 5).map((r) => String(r).slice(0, 220)),
     deal_breakers: (Array.isArray(v.deal_breakers) ? v.deal_breakers : [])
       .slice(0, 5)

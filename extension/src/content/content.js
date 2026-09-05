@@ -135,6 +135,15 @@
       typeof r.total_estimated_repair_cost_eur === 'number' ? r.total_estimated_repair_cost_eur : null;
     const repair = documented || reportTotal || 0;
 
+    // Zählbares aus dem Dokument. Das steht auch dann zur Verfügung, wenn kein
+    // einziger Betrag genannt ist - und genau das ist bei Zustandsberichten der
+    // Normalfall. Ohne diesen Teil bliebe der Tab dort leer.
+    const counts = r.counts || {};
+    const roadworthy = defects.filter((d) => d.affects_roadworthiness).length;
+    const treads = (r.tires || [])
+      .map((t) => t.tread_mm)
+      .filter((mm) => typeof mm === 'number');
+
     return {
       documented: withAmount.length ? documented : null,
       documentedCount: withAmount.length,
@@ -147,7 +156,14 @@
       negotiation: negotiation || null,
       price,
       effective: price !== null && repair ? price + repair : null,
-      target: price !== null && negotiation ? price - negotiation : null
+      target: price !== null && negotiation ? price - negotiation : null,
+      critical: counts.kritisch || 0,
+      medium: counts.mittel || 0,
+      roadworthy,
+      tireCount: treads.length,
+      tiresLow: treads.filter((mm) => mm < 3).length,
+      tiresIllegal: treads.filter((mm) => mm < 1.6).length,
+      minTread: treads.length ? Math.min(...treads) : null
     };
   }
 
@@ -1598,6 +1614,25 @@
       repairRows.push(row('Ohne Betrag im Dokument', `${n.withoutAmount} Position${n.withoutAmount > 1 ? 'en' : ''}`, '', 'open'));
     }
 
+    // Gezählter Befund. Immer verfügbar, auch wenn das Dokument keinen einzigen
+    // Betrag nennt - beim Zustandsbericht ist das der Regelfall.
+    const factRows = [];
+    if (n.totalCount) {
+      factRows.push(row('Mängel gesamt', String(n.totalCount)));
+      if (n.critical) factRows.push(row('davon kritisch', String(n.critical), '', 'urgent'));
+      if (n.medium) factRows.push(row('davon mittel', String(n.medium)));
+    }
+    if (n.roadworthy) {
+      factRows.push(row('HU-/TÜV-relevant', `${n.roadworthy} von ${n.totalCount}`, '', 'urgent'));
+    }
+    if (n.tiresLow) {
+      factRows.push(
+        row('Reifen unter 3 mm', `${n.tiresLow} von ${n.tireCount}`,
+          n.minTread !== null ? `dünnstes Profil ${String(n.minTread).replace('.', ',')} mm` : '',
+          n.tiresIllegal ? 'urgent' : '')
+      );
+    }
+
     const priceRows = [];
     if (n.price !== null) {
       priceRows.push(row('Angebotspreis', esc(fmtCost(n.price))));
@@ -1611,50 +1646,75 @@
       priceRows.push(row('Verhandlungshebel gesamt', esc(fmtCost(n.negotiation)), '', 'target'));
     }
 
-    if (!repairRows.length && !priceRows.length) {
+    if (!repairRows.length && !priceRows.length && !factRows.length) {
       return `<div class="vms-empty muted">${calcIcon()}<div><strong>Nichts zu rechnen</strong>
         <p>Im Dokument stehen keine Beträge, und auf der Seite wurde kein Preis gefunden.</p></div></div>`;
     }
 
+    // Nach Bereich: mit Beträgen wird die Summe gezeigt, sonst die Anzahl der
+    // Befunde. So bleibt sichtbar, wo das Fahrzeug schwerpunktmäßig klemmt.
+    const hasAmounts = n.documented !== null;
     const byCategory = {};
     for (const d of r.defects) {
-      if (typeof d.estimated_cost_eur !== 'number') continue;
+      if (hasAmounts && typeof d.estimated_cost_eur !== 'number') continue;
       const key = CATEGORY_LABEL[d.category] || d.category;
-      byCategory[key] = (byCategory[key] || 0) + d.estimated_cost_eur;
+      byCategory[key] = (byCategory[key] || 0) + (hasAmounts ? d.estimated_cost_eur : 1);
     }
     const cats = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
     const max = cats.length ? cats[0][1] : 0;
+    const barValue = (sum) => (hasAmounts ? fmtCost(sum) : `${sum} Befund${sum > 1 ? 'e' : ''}`);
+
+    const costSection = repairRows.length || priceRows.length
+      ? `<section class="vms-calc">
+           <div class="vms-calc-head">${calcIcon()}<strong>Kosten</strong>
+             <span class="vms-calc-note">nur belegte Beträge</span></div>
+           ${repairRows.join('')}
+           ${repairRows.length && priceRows.length ? '<div class="vms-calc-sep"></div>' : ''}
+           ${priceRows.join('')}
+         </section>`
+      : '';
+
+    // Nennt das Dokument keine Beträge, sagt das Panel das offen, statt eine
+    // leere Kostenrechnung stehen zu lassen.
+    const noAmountHint = !hasAmounts && n.reportTotal === null && n.totalCount
+      ? `<p class="vms-calc-hint">Das Dokument beziffert keine Reparaturkosten. Gerechnet wird
+           deshalb nur mit dem, was belegt ist – gezählte Befunde statt geschätzter Summen.</p>`
+      : '';
+
+    const factSection = factRows.length
+      ? `<section class="vms-calc">
+           <div class="vms-calc-head">${eyeIcon()}<strong>Befund</strong>
+             <span class="vms-calc-note">aus dem Dokument gezählt</span></div>
+           ${factRows.join('')}
+         </section>`
+      : '';
 
     return `
-      <section class="vms-calc">
-        <div class="vms-calc-head">${calcIcon()}<strong>Kosten</strong>
-          <span class="vms-calc-note">nur belegte Beträge</span></div>
-        ${repairRows.join('')}
-        ${repairRows.length && priceRows.length ? '<div class="vms-calc-sep"></div>' : ''}
-        ${priceRows.join('')}
-      </section>
+      ${costSection}
+      ${noAmountHint}
+      ${factSection}
       ${cats.length
         ? `<section class="vms-bars">
-             <div class="vms-bars-head">Nach Bereich</div>
+             <div class="vms-bars-head">Nach Bereich${hasAmounts ? '' : ' (Anzahl)'}</div>
              ${cats
                .map(
                  ([name, sum], i) => `<div class="vms-bar" style="--i:${i}">
                      <span class="vms-bar-label">${esc(name)}</span>
                      <span class="vms-bar-track"><i style="--w:${Math.round((sum / max) * 100)}%"></i></span>
-                     <span class="vms-bar-value">${esc(fmtCost(sum))}</span>
+                     <span class="vms-bar-value">${esc(barValue(sum))}</span>
                    </div>`
                )
                .join('')}
            </section>`
         : ''}
-      ${negotiationBlock(r.verdict || {})}`;
+      ${negotiationBlock(r.verdict || {}, { open: !hasAmounts })}`;
   }
 
-  function negotiationBlock(v) {
+  function negotiationBlock(v, { open = false } = {}) {
     if (!v.negotiation_points?.length) return '';
     const sum = v.negotiation_points.reduce((a, p) => a + (p.amount_eur || 0), 0);
     return `
-      <details class="vms-fold" ${state.expandAll ? 'open' : ''}>
+      <details class="vms-fold" ${state.expandAll || open ? 'open' : ''}>
         <summary>${tagIcon()}<span>Verhandlungshebel (${v.negotiation_points.length})</span>
           ${sum ? `<span class="vms-fold-sum">${esc(fmtCost(sum))}</span>` : ''}</summary>
         <ul class="vms-negotiation">
@@ -1695,9 +1755,32 @@
       </section>
       ${listBlock(v.deal_breakers, 'bad', alertIcon(), 'Ausschlusskriterien')}
       ${listBlock(v.before_first_drive, 'warn', wrenchIcon(), 'Vor der ersten Fahrt')}
+      ${dataBasisBlock(r, v)}
       ${r.summary ? `<p class="vms-lead">${esc(r.summary)}</p>` : ''}
       <p class="vms-disclaimer">Einschätzung allein aus den verlinkten Dokumenten – ersetzt keine
         Besichtigung und keine Probefahrt.</p>`;
+  }
+
+  /**
+   * Was das Dokument NICHT hergibt. Bei "unklar" ist das die eigentliche
+   * Antwort - vorher stand dort nur die Vokabel ohne jede Begründung.
+   */
+  function dataBasisBlock(r, v) {
+    const missing = r.missing_info || [];
+    const unclear = v.recommendation === 'unklar';
+    if (!missing.length && !unclear) return '';
+    if (!missing.length) {
+      return `<section class="vms-callout muted">
+          <div class="vms-callout-head">${questionIcon()}<strong>Datenlage</strong></div>
+          <ul><li>Das Dokument enthält keine belastbaren Zustandsangaben, aus denen sich ein
+            Urteil ableiten ließe.</li></ul>
+        </section>`;
+    }
+    return `
+      <section class="vms-callout muted">
+        <div class="vms-callout-head">${questionIcon()}<strong>${unclear ? 'Warum unklar' : 'Nicht im Dokument'}</strong></div>
+        <ul>${missing.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>
+      </section>`;
   }
 
   function scoreRing(score, tone) {

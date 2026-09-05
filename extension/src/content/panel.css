@@ -560,6 +560,11 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
   border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent);
   --c: var(--warn);
 }
+.vms-callout.muted {
+  background: color-mix(in srgb, var(--text-dim) 7%, transparent);
+  border: 1px solid var(--line);
+  --c: var(--text-dim);
+}
 .vms-callout-head { display: flex; align-items: center; gap: 6px; color: var(--c); margin-bottom: 5px; }
 .vms-callout-head strong { font-size: 12px; font-weight: 650; }
 .vms-callout ul { margin: 0; padding-left: 19px; display: flex; flex-direction: column; gap: 3px; }
@@ -733,6 +738,15 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
 .vms-calc-head strong { font-size: 12px; letter-spacing: 0.02em; text-transform: uppercase; }
 .vms-calc-head svg { color: var(--accent); }
 .vms-calc-note { margin-left: auto; font-size: 10px; color: var(--text-dim); }
+
+/* Hinweis, wenn das Dokument keine Beträge nennt */
+.vms-calc-hint {
+  margin: -3px 0 10px;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
 
 .vms-calc-row {
   display: flex;

@@ -18,8 +18,8 @@ Die Rechnung und die Einschätzung liegen jeweils einen Klick daneben.
 | Tab | Inhalt |
 | --- | --- |
 | **Mängel** (Start) | Schäden von der Seite, dann die Liste aus dem PDF – Schwere, TÜV-Relevanz, Kosten, Beleg-Zitat. Keine Meinung. |
-| **Berechnet** | Kostenrechnung aus belegten Beträgen, Kosten je Bereich, Verhandlungshebel |
-| **Meinung** | Kaufempfehlung mit Zustands-Score, Begründungen, Ausschlusskriterien |
+| **Berechnet** | Kostenrechnung aus belegten Beträgen; nennt das Dokument keine, tritt der gezählte Befund an ihre Stelle. Dazu Bereichsverteilung und Verhandlungshebel |
+| **Meinung** | Kaufempfehlung mit Zustands-Score, Begründungen, Ausschlusskriterien – und bei „Unklar“ die fehlenden Angaben |
 
 Auch der Kopf des Panels und das Toolbar-Symbol bleiben sachlich: dort steht die Zahl der
 Mängel, nicht das Urteil.
@@ -62,13 +62,15 @@ sehen will, bekommt keine Bewertung aufgedrängt:
 
 Dazu gibt es:
 
-- **Zustands-Score 0–100** als animierter Ring, allein aus dem Dokument abgeleitet
+- **Zustands-Score 0–100** als animierter Ring, allein aus dem Dokument abgeleitet. Bei
+  **Unklar** bleibt der Ring leer: eine 0 hieße „Totalschaden“, gemeint ist aber „keine Angabe“
 - **Begründungen**, jede auf einen konkreten Befund gestützt
 - **Ausschlusskriterien** (roter Block) – z. B. Rost an tragenden Teilen, Motorschaden
 - **Vor der ersten Fahrt** (gelber Block) – was verkehrssicherheitsrelevant ist
 - **Verhandlungshebel** mit Beträgen, teuerster zuerst
 - **Reparaturbudget** als Summe bzw. Spanne der im Dokument bezifferten Positionen
 - **Preis-Einordnung**, sofern auf der Seite ein Preis steht (wird automatisch mitgelesen)
+- **Warum unklar** – welche Angaben im Dokument fehlen, damit ein Urteil möglich wäre
 
 Das Urteil bewertet ausschließlich den **dokumentierten** Zustand. Es ersetzt keine
 Besichtigung und keine Probefahrt – das steht auch im Tab selbst.
@@ -249,6 +251,7 @@ extension/
 test/
   e2e.mjs                  End-to-End-Test mit echtem Chromium
   bca-viewpdf.mjs          Dokumentenabruf über zwei Origins (BCA-Topologie)
+  tabs-sparse.mjs          Berechnet/Meinung bei dünner Datenlage
   make-fixtures.py         erzeugt die Test-PDFs neu
   fixtures/                Testseiten, Test-PDFs, Mock-Antwort
 ```
@@ -259,6 +262,7 @@ test/
 npm install -D playwright        # Chromium wird benötigt
 node test/e2e.mjs
 node test/bca-viewpdf.mjs
+node test/tabs-sparse.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension
@@ -294,6 +298,13 @@ Link auf das PDF, nur ein Skript und ein leeres
 CORS-Fehler in der Seite), dass jede Anfrage die Session trägt, dass der Warte-Poll nicht
 auf einen fremden Endpunkt abbiegt, und dass die Warteseite per POST weitergeführt wird
 statt endlos per GET.
+
+`test/tabs-sparse.mjs` prüft 22 Punkte für den Fall, der bei Zustandsberichten der Regelfall
+ist: Schäden ja, Euro-Beträge nein. **Berechnet** muss dann trotzdem etwas rechnen – gezählte
+Mängel, kritische Befunde, HU-Relevanz, Reifen unter 3 mm samt dünnstem Profil, Balken nach
+Anzahl statt nach Summe – und darf keine Reparatursumme erfinden. **Meinung** muss bei einem
+Urteil „unklar“ den Score-Ring leer lassen statt eine 0 zu zeigen und benennen, welche Angabe
+fehlt.
 
 Beim ersten Lauf erzeugen die Tests mit `openssl` selbstsignierte Wegwerf-Zertifikate für
 die Testhosts unter `test/fixtures/cert/` bzw. `test/fixtures/cert-<host>/` (nicht

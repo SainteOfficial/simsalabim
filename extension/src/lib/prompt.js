@@ -8,7 +8,7 @@
  * PROMPT_VERSION geht in den Cache-Key ein: Prompt ändern => Cache wird ungültig.
  */
 
-export const PROMPT_VERSION = 5;
+export const PROMPT_VERSION = 6;
 
 /* ------------------------------------------------------------- Bausteine */
 
@@ -113,10 +113,18 @@ const VERDICT = {
         'sicherheitskritische Mängel bzw. Unfall-/Rostverdacht; unklar = Datenlage reicht nicht.'
     },
     score: {
-      type: 'integer',
-      description: 'Zustands-Score 0-100 allein aus dem Dokument. 100 = mängelfrei.'
+      type: ['integer', 'null'],
+      description:
+        'Zustands-Score 0-100 allein aus dem Dokument. 100 = mängelfrei. ' +
+        'null, wenn die Datenlage für ein Urteil nicht reicht (recommendation "unklar") - ' +
+        'eine 0 hieße "Totalschaden" und wäre dort falsch.'
     },
-    headline: { type: 'string', description: 'Ein Satz, der die Empfehlung auf den Punkt bringt.' },
+    headline: {
+      type: 'string',
+      description:
+        'Ein Satz, der die Empfehlung auf den Punkt bringt. Bei "unklar": welche Angabe fehlt, ' +
+        'damit ein Urteil möglich wäre. Nie leer lassen.'
+    },
     reasons: {
       type: 'array',
       items: { type: 'string' },
@@ -197,7 +205,10 @@ export const DEFECT_SCHEMA = {
       missing_info: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Wichtige Angaben, die im Dokument fehlen (z.B. "keine Reifenprofiltiefe").'
+        description:
+          'Wichtige Angaben, die im Dokument fehlen (z.B. "keine Reifenprofiltiefe", ' +
+          '"keine Angabe zu Unfallschäden"). Das ist die Begründung dafür, wie weit die ' +
+          'Einschätzung trägt - bei recommendation "unklar" hier nicht leer lassen.'
       },
       confidence: { type: 'number', description: '0..1 - wie sicher ist die Extraktion.' },
       verdict: VERDICT
@@ -278,7 +289,8 @@ const VERDICT_RULES = [
   '  Sichtfeldschaden) wiegen schwer und führen mindestens zu "nachverhandeln".',
   '- Unfallschaden, Rost an tragenden Teilen, Motor-/Getriebeschaden oder fehlende Papiere sind',
   '  deal_breakers und führen zu "finger_weg".',
-  '- Ohne belastbare Zustandsangaben lautet die Empfehlung "unklar" - nicht raten.',
+  '- Ohne belastbare Zustandsangaben lautet die Empfehlung "unklar" - nicht raten. Dann score null',
+  '  setzen (nicht 0) und in missing_info benennen, welche Angaben für ein Urteil fehlen.',
   '- Steht im Kontext ein Preis, ordne ihn in price_assessment gegen den Zustand ein;',
   '  steht keiner da, setze price_assessment auf null und bewerte nur den Zustand.',
   '- negotiation_points sind konkrete Hebel aus dem Dokument, teuerster zuerst.'
