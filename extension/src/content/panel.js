@@ -8,6 +8,12 @@
   window.__vmsInjected = true;
 
   const MAX_DOCS = 8;
+  /*
+   * Wie viel Base64 höchstens durch chrome.runtime.sendMessage geht. Der Kanal
+   * endet bei 64 MiB - inklusive allem anderen im Umschlag. 24 MiB lassen
+   * reichlich Luft und decken jedes übliche Fahrzeugdokument ab.
+   */
+  const MAX_INLINE_BASE64 = 24 * 1024 * 1024;
   const VIN_RE = /\b[A-Z0-9]{17}\b/;
 
   /**
@@ -782,17 +788,32 @@
 
     try {
       const payloadDocs = [];
+      let inlineLeft = MAX_INLINE_BASE64;
       for (const doc of state.docs) {
         pushStep('download', `Lade ${doc.label}`);
         logDebug('DOWNLOAD', `Versuche Download im Tab: ${doc.url}`);
         const fetched = await fetchPdfInPage(doc.url);
+
+        // Die Bytes gehen per sendMessage an den Hintergrunddienst, und der
+        // Kanal ist bei 64 MiB zu Ende. Base64 bläht ein PDF um ein Drittel
+        // auf; mehrere große Dokumente reißen die Grenze und die ganze Analyse
+        // bricht ab. Was nicht mehr ins Budget passt, lädt der
+        // Hintergrunddienst selbst - er kommt an dieselbe Adresse.
+        let inline = null;
         if (fetched) {
-          logDebug('DOWNLOAD', `Erfolgreich im Tab geladen (${Math.round(fetched.bytes / 1024)} KB)`);
+          if (fetched.base64.length <= inlineLeft) {
+            inline = fetched.base64;
+            inlineLeft -= fetched.base64.length;
+            logDebug('DOWNLOAD', `Erfolgreich im Tab geladen (${Math.round(fetched.bytes / 1024)} KB)`);
+          } else {
+            logDebug('DOWNLOAD', `${doc.label} ist zu groß für die Übergabe – der Hintergrunddienst lädt es erneut.`);
+          }
         } else {
           logDebug('DOWNLOAD', `Tab-Download fehlgeschlagen (CORS/Redirect o.ä.) – Übergabe an Hintergrunddienst.`);
         }
-        payloadDocs.push({ ...doc, base64: fetched?.base64 || null, bytes: fetched?.bytes || 0 });
-        completeStep('download', fetched ? `${doc.label} geladen` : `${doc.label} (Download über Hintergrund)`);
+
+        payloadDocs.push({ ...doc, base64: inline, bytes: inline ? fetched.bytes : 0 });
+        completeStep('download', inline ? `${doc.label} geladen` : `${doc.label} (Download über Hintergrund)`);
       }
 
       pushStep('ai', 'KI analysiert Dokumente');
