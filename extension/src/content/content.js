@@ -463,15 +463,37 @@
       const km = norm(document.body?.innerText || '').match(/([\d][\d.\s']{2,9})\s?km\b/i);
       if (km) ctx.kilometer = km[1].trim() + ' km';
     }
-    if (!ctx.preis) {
-      // Preis nur uebernehmen, wenn er als solcher ausgezeichnet ist - sonst lieber keiner.
-      const text = norm(document.body?.innerText || '').slice(0, 20000);
-      const m = text.match(
-        /(?:Preis|Kaufpreis|Sofortkauf|Startpreis|Price)[^0-9]{0,15}((?:\d{1,3}[.\s])?\d{1,3}(?:[.,]\d{2})?)\s*(?:€|EUR)/i
-      ) || text.match(/(?:€|EUR)\s?((?:\d{1,3}[.\s])?\d{3}(?:[.,]\d{2})?)\b/);
-      if (m) ctx.preis = `${m[1].trim()} EUR`;
-    }
+    if (!ctx.preis) ctx.preis = findPriceInText(norm(document.body?.innerText || '').slice(0, 20000));
     return ctx;
+  }
+
+  /* Betrag: 18.900 / 18 900 / 1.118.900 / 18900 / 18.900,00 - mit und ohne Tausenderpunkt. */
+  const AMOUNT = '\\d{1,3}(?:[.\\u00a0 ]\\d{3})+(?:,\\d{2})?|\\d{3,}(?:,\\d{2})?';
+  const PRICE_LABEL =
+    '(?:Preis|Kaufpreis|Verkaufspreis|Sofortkauf|Sofort-Kauf|Startpreis|Mindestpreis|Gebot|Price|Buy\\s?now)';
+  const PRICE_AFTER = new RegExp(`${PRICE_LABEL}[^0-9]{0,20}(${AMOUNT})\\s*(?:€|EUR)`, 'i');
+  const PRICE_BEFORE = new RegExp(`${PRICE_LABEL}[^0-9]{0,20}(?:€|EUR)\\s*(${AMOUNT})`, 'i');
+  const ANY_AMOUNT = new RegExp(`(?:(?:€|EUR)\\s*(${AMOUNT})|(${AMOUNT})\\s*(?:€|EUR))`, 'gi');
+
+  /**
+   * Preis aus dem Fließtext. Ein falscher Preis ist schlimmer als gar keiner -
+   * er verfälscht Effektivpreis und Verhandlungsziel im Tab "Berechnet".
+   * Deshalb: beschriftete Angabe bevorzugt, und ohne Beschriftung nur dann,
+   * wenn die Seite genau einen plausiblen Betrag zeigt. Sonst lieber keiner.
+   */
+  function findPriceInText(text) {
+    const labelled = text.match(PRICE_AFTER) || text.match(PRICE_BEFORE);
+    if (labelled) {
+      const n = parseEuro(labelled[1]);
+      return n === null ? null : `${fmtNumber(n)} EUR`;
+    }
+    const found = new Set();
+    for (const m of text.matchAll(ANY_AMOUNT)) {
+      const n = parseEuro(m[1] || m[2]);
+      // Gebühren, Versand und Zulassungskosten liegen darunter.
+      if (n !== null && n >= 500) found.add(n);
+    }
+    return found.size === 1 ? `${fmtNumber([...found][0])} EUR` : null;
   }
 
   function isVehiclePage(docs, ctx) {
@@ -1768,7 +1790,9 @@
   function dataBasisBlock(r, v) {
     const missing = r.missing_info || [];
     const unclear = v.recommendation === 'unklar';
-    if (!missing.length && !unclear) return '';
+    // Außerhalb von "unklar" steht die Liste schon im Mängel-Tab - im engen
+    // Panel wäre eine zweite Kopie nur Rauschen.
+    if (!unclear) return '';
     if (!missing.length) {
       return `<section class="vms-callout muted">
           <div class="vms-callout-head">${questionIcon()}<strong>Datenlage</strong></div>
@@ -1778,7 +1802,7 @@
     }
     return `
       <section class="vms-callout muted">
-        <div class="vms-callout-head">${questionIcon()}<strong>${unclear ? 'Warum unklar' : 'Nicht im Dokument'}</strong></div>
+        <div class="vms-callout-head">${questionIcon()}<strong>Warum unklar</strong></div>
         <ul>${missing.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>
       </section>`;
   }

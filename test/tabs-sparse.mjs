@@ -104,12 +104,16 @@ const siteServer = https.createServer(certificate(HOST), (req, res) => {
     res.writeHead(404).end('not found');
     return;
   }
-  // Nur die Variante "mit-preis" nennt einen Preis auf der Seite.
-  const withPrice = u.searchParams.get('id') === 'mit-preis';
+  // "mit-preis" nennt den Preis in einer Tabellenzeile, "text:<...>" als
+  // Fliesstext - damit laesst sich die Erkennung einzeln pruefen.
+  const id = u.searchParams.get('id') || '';
+  const withPrice = id === 'mit-preis';
+  const freeText = id.startsWith('text:') ? decodeURIComponent(id.slice(5)) : '';
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Volkswagen Touran</title></head>
 <body><h1>Volkswagen Touran 2.0 TDI</h1>
 <p><a href="/zustandsbericht.pdf">Fahrzeug PDF</a></p>
+${freeText ? `<p>${freeText}</p>` : ''}
 <table>
 <tr><td>Fahrgestellnummer</td><td>WVGZZZ1T4PW004548</td></tr>
 <tr><td>Kilometerstand</td><td>207121 km</td></tr>
@@ -245,6 +249,26 @@ const valueOf = (label) =>
   check('Unklar: die fehlende Angabe steht da',
     await q(`r.querySelector('.vms-callout.muted li')?.textContent.trim()`), 'kein Fehlerspeicher-Auslesen dokumentiert');
   await page.close();
+}
+
+/* 4 - Preiserkennung. Ein falscher Preis verfaelscht die ganze Kostenrechnung,
+      deshalb im Zweifel lieber keiner. */
+{
+  const cases = [
+    ['Kaufpreis 18900 EUR', '18.900 €', 'ohne Tausenderpunkt'],
+    ['Preis 1.118.900 EUR', '1.118.900 €', 'zwei Tausendergruppen'],
+    ['Preis: EUR 18.900', '18.900 €', 'Waehrung vor dem Betrag'],
+    ['Versandkosten 49 EUR und Sofortkauf 18.900 EUR', '18.900 €', 'Gebuehr davor wird uebergangen'],
+    ['Nur ein Betrag auf der Seite: 18.900 EUR', '18.900 €', 'unbeschriftet, aber eindeutig'],
+    ['Transportpauschale 750 EUR, Zulassung 890 EUR', undefined, 'mehrdeutig -> gar kein Preis'],
+    ['Auktion endet 2024', undefined, 'keine Waehrung -> kein Preis']
+  ];
+  for (const [text, want, why] of cases) {
+    const { page, at, q } = await open(FULL, `text:${encodeURIComponent(text)}`);
+    await at('berechnet');
+    check(`Preis (${why})`, await q(valueOf('Angebotspreis')), want);
+    await page.close();
+  }
 }
 
 check('Keine Fehler im Service Worker', swErrors, []);
