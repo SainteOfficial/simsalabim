@@ -261,7 +261,13 @@ await openTab(page, 'meinung');
 check('Meinung liegt in einem eigenen Tab', await evalRoot(page, `r.dataset.tab`), 'meinung');
 check('Empfehlungsblock vorhanden', await evalRoot(page, `Boolean(r.querySelector('.vms-verdict.warn'))`), true);
 check('Zustands-Score angezeigt', await evalRoot(page, `r.querySelector('.vms-ring-num')?.textContent.trim()`), '58');
-check('Score-Ring wird animiert', await evalRoot(page, `(() => { const c = r.querySelector('.vms-ring-value'); return Number(c.style.strokeDashoffset) > 0 && Number(c.style.strokeDashoffset) < Number(c.dataset.offset) * 3; })()`), true);
+// Der Ring muss den Zielwert wirklich erreichen. Vorher galt der Test schon
+// als bestanden, wenn der Startwert stehen blieb - die Animation konnte also
+// ausfallen, ohne dass es auffiel.
+check('Score-Ring läuft auf den Wert zu', await evalRoot(page, `(() => {
+  const c = r.querySelector('.vms-ring-value');
+  return Math.abs(Number(c.style.strokeDashoffset) - Number(c.dataset.offset)) < 0.5;
+})()`), true);
 check('Begründungen gelistet', await evalRoot(page, `r.querySelectorAll('.vms-reasons li').length`), 3);
 check('"Vor der ersten Fahrt" als Warnblock', await evalRoot(page, `r.querySelectorAll('.vms-callout.warn li').length`), 2);
 check('Keine Ausschlusskriterien -> kein roter Block', await evalRoot(page, `Boolean(r.querySelector('.vms-callout.bad'))`), false);

@@ -147,7 +147,6 @@ export function AgentDock({
                 )
               }
               label={mode === "composing" ? "Senden" : "Fragen"}
-              shortcut="C"
               type="submit"
             />
           </div>
@@ -193,13 +192,11 @@ function DockButton({
   disabled = false,
   icon,
   label,
-  shortcut,
   type = "button",
 }: {
   disabled?: boolean;
   icon: ReactNode;
   label: string;
-  shortcut: string;
   type?: "button" | "submit";
 }) {
   return (
@@ -210,9 +207,6 @@ function DockButton({
     >
       <span className="size-4">{icon}</span>
       <span>{label}</span>
-      <kbd className="flex size-6 items-center justify-center rounded-md bg-panel-text/10 font-mono text-xs">
-        {shortcut}
-      </kbd>
     </button>
   );
 }

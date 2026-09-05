@@ -919,23 +919,21 @@
     shadow.append(style, root);
     (document.body || document.documentElement).appendChild(host);
 
-    // Platz für die React-Insel. Das Panel setzt bei jedem render() sein
-    // innerHTML neu - der Slot wird danach wieder angehängt, damit React
-    // seinen Zustand behält, statt bei jedem Klick neu zu starten.
+    // Zwei Knoten gehören React und überleben deshalb das innerHTML in
+    // render(): der Inhalt der Tabs und der Chat darunter. Sie werden nach
+    // jedem Neuaufbau wieder angehängt, damit React seinen Zustand behält -
+    // Suchtext, aufgeklappte Karten und Chatverlauf bleiben stehen.
+    const body = document.createElement('div');
+    body.className = 'vms-body';
+
     const slot = document.createElement('div');
     slot.id = 'vms-react-root';
 
-    ui = { host, shadow, root, slot };
-    globalThis.__vmsBridge = { shadow, slot, state: publicState() };
+    ui = { host, shadow, root, slot, body };
+    publishState();
     document.dispatchEvent(new CustomEvent('vms:ready'));
     applyStoredPosition();
     root.addEventListener('click', onClick);
-    root.addEventListener('change', (e) => {
-      const sel = e.target.closest('[data-act="sort"]');
-      if (!sel) return;
-      state.sort = sel.value;
-      render();
-    });
     return ui;
   }
 
@@ -968,21 +966,11 @@
       send({ type: 'OPEN_OPTIONS' });
     } else if (act === 'copy') {
       copyResult(btn);
-    } else if (act === 'filter') {
-      state.filter = btn.dataset.value;
-      render();
-    } else if (act === 'toggle-defect') {
-      const card = btn.closest('.vms-defect');
-      const open = !card.classList.contains('open');
-      card.classList.toggle('open', open);
-      btn.setAttribute('aria-expanded', String(open));
-      if (open) state.openDefects.add(card.dataset.id);
-      else state.openDefects.delete(card.dataset.id);
     } else if (act === 'tab') {
       switchTab(btn.dataset.value);
     } else if (act === 'more-onpage') {
       state.showAllPageDamages = true;
-      render();
+      publishState();
     } else if (act === 'theme') {
       state.theme = THEME_ORDER[(THEME_ORDER.indexOf(state.theme) + 1) % THEME_ORDER.length];
       chrome.storage.local.set({ panelTheme: state.theme });
@@ -996,10 +984,6 @@
       state.closed = false;
       state.collapsed = false;
       buildUi().then(render);
-    } else if (act === 'expand-all') {
-      state.expandAll = !state.expandAll;
-      if (!state.expandAll) state.openDefects.clear();
-      render();
     } else if (act === 'open-doc') {
       window.open(btn.dataset.url, '_blank', 'noopener');
     } else if (act === 'open-debug') {
@@ -1173,22 +1157,66 @@
 
   /* ------------------------------------------------------------ Grundgerüst */
 
-  /** Der Ausschnitt des Zustands, den die React-Insel sieht. Bewusst schmal. */
+  /** Der Ausschnitt des Zustands, den die React-Insel sieht. */
   function publicState() {
-    return { status: state.status, context: state.context, result: state.result };
+    return {
+      status: state.status,
+      view: state.view,
+      tab: state.tab,
+      context: state.context,
+      pageDamages: state.pageDamages,
+      showAllPageDamages: state.showAllPageDamages,
+      docs: state.docs.map((d) => ({ url: d.url, label: d.label })),
+      result: state.result
+    };
   }
 
   let lastPublished = '';
+  let morphFrom = 0;
 
   /** Meldet den Zustand an die React-Insel, aber nur wenn sich etwas geändert hat. */
-  function publishState() {
+  function publishState({ force = false } = {}) {
     if (!ui) return;
     const next = publicState();
-    const signature = `${next.status}|${next.result?.meta?.ts || ''}|${Object.keys(next.context || {}).length}`;
-    globalThis.__vmsBridge = { shadow: ui.shadow, slot: ui.slot, state: next };
-    if (signature === lastPublished) return;
+    const signature = [
+      next.status,
+      next.view,
+      next.tab,
+      next.result?.meta?.ts || '',
+      next.showAllPageDamages,
+      state.steps.length,
+      state.progressPct,
+      state.error?.message || '',
+      state.isDiagnosingApi,
+      state.isDiagnosingPdf,
+      state.apiDiagnosis ? 1 : 0,
+      state.pdfDiagnosis ? 1 : 0,
+      state.debugLogs.length
+    ].join('|');
+    globalThis.__vmsBridge = {
+      shadow: ui.shadow,
+      slot: ui.slot,
+      body: ui.body,
+      state: next,
+      legacyBody,
+      morphFrom
+    };
+    if (!force && signature === lastPublished) return;
     lastPublished = signature;
     document.dispatchEvent(new CustomEvent('vms:state', { detail: next }));
+  }
+
+  /**
+   * Die Ansichten, die noch nicht als Komponente vorliegen: Diagnose sowie
+   * alles vor dem fertigen Ergebnis. React hängt das HTML unverändert ein, die
+   * Klickziele darin bedient weiterhin der Delegat in onClick().
+   */
+  function legacyBody() {
+    if (state.view === 'debug') return debugBody();
+    if (state.status === 'busy') return busyBody();
+    if (state.status === 'error') return errorBody();
+    if (state.status !== 'done') return idleBody();
+    return '';
   }
 
   function render() {
@@ -1205,57 +1233,36 @@
       (state.collapsed
         ? ''
         : tabBar() +
-          `<div class="vms-body" data-tab="${state.tab}">${tabContent()}</div>` +
+          '<div class="vms-body-anchor"></div>' +
           footer() +
           '<div class="vms-resize" title="Größe ändern" aria-hidden="true"></div>');
 
-    // Der Slot überlebt das innerHTML oben, weil er danach wieder angehängt
-    // wird - React behält damit Verlauf und Eingabe im Chat.
-    if (!state.collapsed && ui.slot) root.appendChild(ui.slot);
+    // Body und Chat gehören React und überleben das innerHTML oben, weil sie
+    // hier wieder eingehängt werden.
+    if (!state.collapsed) {
+      ui.body.dataset.tab = state.tab;
+      root.querySelector('.vms-body-anchor')?.replaceWith(ui.body);
+      root.appendChild(ui.slot);
+    }
     publishState();
 
     attachDrag();
     attachResize();
-    attachSearch();
     positionBlob(false);
-    animateScore();
     applySize();
   }
 
   /** Wechselt den Tab und morpht dabei Höhe und Inhalt ineinander. */
   function switchTab(id) {
     if (id === state.tab || !ui) return;
-    const body = ui.root.querySelector('.vms-body');
-    if (!body) {
-      state.tab = id;
-      render();
-      return;
-    }
 
-    const from = body.getBoundingClientRect().height;
+    // Die Ausgangshöhe gibt es nur jetzt - nach dem Rendern ist sie weg.
+    // React setzt den Übergang darauf auf (siehe useTabMorph).
+    morphFrom = ui.body.getBoundingClientRect().height;
     state.tab = id;
     ui.root.dataset.tab = id;
-
-    body.classList.add('morphing');
-    body.innerHTML = tabContent();
-    body.dataset.tab = id;
-    body.style.height = 'auto';
-    const target = Math.min(maxBodyHeight(), body.scrollHeight);
-    body.style.height = `${from}px`;
-    void body.offsetHeight; // Reflow, damit der Übergang startet
-
-    requestAnimationFrame(() => {
-      body.style.height = `${target}px`;
-    });
-    body.addEventListener(
-      'transitionend',
-      (e) => {
-        if (e.propertyName !== 'height') return;
-        body.style.height = '';
-        body.classList.remove('morphing');
-      },
-      { once: true }
-    );
+    ui.body.dataset.tab = id;
+    publishState();
 
     ui.root.querySelectorAll('.vms-tab').forEach((t) => {
       const on = t.dataset.value === id;
@@ -1263,8 +1270,6 @@
       t.setAttribute('aria-selected', String(on));
     });
     positionBlob(true);
-    attachSearch();
-    animateScore();
   }
 
   function maxBodyHeight() {
@@ -1290,17 +1295,6 @@
     } else {
       requestAnimationFrame(() => (blob.style.transition = ''));
     }
-  }
-
-  function animateScore() {
-    const ring = ui?.root.querySelector('.vms-ring-value');
-    if (!ring) return;
-    const target = Number(ring.dataset.offset);
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        ring.style.strokeDashoffset = String(target);
-      })
-    );
   }
 
   /* ----------------------------------------------------------------- Kopf */
@@ -1358,16 +1352,6 @@
   }
 
   /* -------------------------------------------------------------- Inhalte */
-
-  function tabContent() {
-    if (state.view === 'debug') return debugBody();
-    if (state.status === 'busy') return busyBody();
-    if (state.status === 'error') return errorBody();
-    if (state.status !== 'done') return idleBody();
-    if (state.tab === 'berechnet') return calcTab();
-    if (state.tab === 'meinung') return opinionTab();
-    return defectTab();
-  }
 
   function debugBody() {
     const doc = state.docs[0];
@@ -1455,6 +1439,24 @@
       </div>`;
   }
 
+  /**
+   * Schäden, die schon auf der Seite stehen. Wird von den noch nicht
+   * portierten Ansichten gebraucht; im Mängel-Tab rendert React sie selbst.
+   */
+  function pageDamageBlock() {
+    if (!state.pageDamages.length) return '';
+    const shown = state.pageDamages.slice(0, state.showAllPageDamages ? 25 : 5);
+    return `
+      <section class="vms-onpage">
+        <div class="vms-onpage-head">${eyeIcon()}<strong>Direkt von der Seite</strong>
+          <span class="vms-onpage-count">${state.pageDamages.length}</span></div>
+        <ul>${shown.map((t, i) => `<li style="--i:${i}">${esc(t)}</li>`).join('')}</ul>
+        ${state.pageDamages.length > shown.length
+          ? `<button class="vms-link" data-act="more-onpage">alle ${state.pageDamages.length} anzeigen</button>`
+          : ''}
+      </section>`;
+  }
+
   function idleBody() {
     return `
       ${pageDamageBlock()}
@@ -1503,369 +1505,6 @@
       </div>`;
   }
 
-  /** Schäden, die das Portal selbst anzeigt - sofort sichtbar, ohne Analyse. */
-  function pageDamageBlock() {
-    if (!state.pageDamages.length) return '';
-    const shown = state.pageDamages.slice(0, state.showAllPageDamages ? 25 : 5);
-    return `
-      <section class="vms-onpage">
-        <div class="vms-onpage-head">${eyeIcon()}<strong>Direkt von der Seite</strong>
-          <span class="vms-onpage-count">${state.pageDamages.length}</span></div>
-        <ul>${shown.map((t, i) => `<li style="--i:${i}">${esc(t)}</li>`).join('')}</ul>
-        ${state.pageDamages.length > shown.length
-          ? `<button class="vms-link" data-act="more-onpage">alle ${state.pageDamages.length} anzeigen</button>`
-          : ''}
-      </section>`;
-  }
-
-  /* ------------------------------------------------------------ Tab Mängel */
-
-  function defectTab() {
-    const r = state.result;
-    if (!r.defects.length) {
-      return `
-        ${pageDamageBlock()}
-        <div class="vms-empty">${checkBig()}<div><strong>Keine Mängel dokumentiert</strong>
-          <p>${esc(r.report_found ? 'Im Dokument sind keine Schäden vermerkt.' : 'Das Dokument enthält keine Zustandsangaben.')}</p></div></div>
-        ${coverageBlock()}`;
-    }
-
-    const counts = r.counts || {};
-    const chips = ['alle', 'kritisch', 'mittel', 'gering', 'hinweis']
-      .filter((k) => k === 'alle' || counts[k])
-      .map(
-        (k) =>
-          `<button class="vms-chip ${k} ${state.filter === k ? 'on' : ''}" data-act="filter" data-value="${k}">
-             ${k === 'alle' ? `Alle ${r.defects.length}` : `${SEV_LABEL[k]} ${counts[k]}`}
-           </button>`
-      )
-      .join('');
-
-    const visible = r.defects
-      .filter((d) => state.filter === 'alle' || d.severity === state.filter)
-      .slice()
-      .sort(SORTERS[state.sort] || SORTERS.schwere);
-
-    const showSearch = r.defects.length >= 5;
-
-    return `
-      ${pageDamageBlock()}
-      <div class="vms-toolbar">
-        <div class="vms-chips">${chips}</div>
-        <button class="vms-ghost sm" data-act="expand-all">${state.expandAll ? 'Zuklappen' : 'Alle Details'}</button>
-      </div>
-      ${showSearch
-        ? `<div class="vms-searchbar">
-             <span class="vms-search-icon">${searchIcon()}</span>
-             <input class="vms-search" type="search" placeholder="Mängel durchsuchen…"
-               value="${esc(state.search)}" aria-label="Mängel durchsuchen" />
-             <select class="vms-sort" aria-label="Sortierung" data-act="sort">
-               <option value="schwere"${state.sort === 'schwere' ? ' selected' : ''}>Schwere</option>
-               <option value="kosten"${state.sort === 'kosten' ? ' selected' : ''}>Kosten</option>
-               <option value="seite"${state.sort === 'seite' ? ' selected' : ''}>Seite</option>
-             </select>
-           </div>
-           <div class="vms-hits" hidden></div>`
-        : ''}
-      <div class="vms-list">${visible.map((d, i) => defectCard(d, i)).join('')}</div>
-      <div class="vms-nohits" hidden>Kein Mangel passt zu dieser Suche.</div>
-      ${tiresBlock(r)}
-      ${r.missing_info?.length ? `<div class="vms-missing"><strong>Nicht im Dokument:</strong> ${esc(r.missing_info.join(', '))}</div>` : ''}
-      ${coverageBlock()}`;
-  }
-
-  function defectCard(d, index) {
-    const cost = fmtCost(d.estimated_cost_eur);
-    const open = state.expandAll || state.openDefects.has(defectId(d));
-    return `
-      <article class="vms-defect ${d.severity} ${open ? 'open' : ''}" style="--i:${index}"
-        data-id="${esc(defectId(d))}" data-search="${esc(searchText(d))}">
-        <button class="vms-defect-head" data-act="toggle-defect" aria-expanded="${open}">
-          <span class="vms-sev" title="${SEV_LABEL[d.severity]}"></span>
-          <span class="vms-defect-title">${esc(d.title)}</span>
-          ${d.affects_roadworthiness ? '<span class="vms-tag tuv" title="HU/TÜV-relevant">TÜV</span>' : ''}
-          ${cost ? `<span class="vms-tag cost">${esc(cost)}</span>` : ''}
-          <span class="vms-caret">${chevronDown()}</span>
-        </button>
-        <div class="vms-defect-body"><div class="vms-defect-inner"><div class="vms-defect-pad">
-          <p>${esc(d.description)}</p>
-          <div class="vms-meta">
-            ${d.area ? `<span>${esc(d.area)}</span>` : ''}
-            <span class="vms-cat">${esc(CATEGORY_LABEL[d.category] || d.category)}</span>
-            ${d.source_page
-              ? primaryDocUrl()
-                ? `<button class="vms-page" data-act="page" data-page="${d.source_page}"
-                     title="PDF auf Seite ${d.source_page} öffnen">Seite ${d.source_page}${externalIcon()}</button>`
-                : `<span>Seite ${d.source_page}</span>`
-              : ''}
-          </div>
-          ${d.quote ? `<blockquote>${esc(d.quote)}</blockquote>` : ''}
-        </div></div></div>
-      </article>`;
-  }
-
-  function tiresBlock(r) {
-    if (!r.tires?.length) return '';
-    const rows = r.tires
-      .map(
-        (t) =>
-          `<tr><td>${esc(t.position || '')}</td><td>${esc(t.dimension || '-')}</td>
-           <td class="${typeof t.tread_mm === 'number' && t.tread_mm < 3 ? 'low' : ''}">${t.tread_mm != null ? `${t.tread_mm} mm` : '-'}</td>
-           <td>${esc(t.note || '')}</td></tr>`
-      )
-      .join('');
-    return `<details class="vms-fold" ${state.expandAll ? 'open' : ''}>
-      <summary>${tireIcon()}<span>Reifen (${r.tires.length})</span></summary>
-      <table class="vms-tires"><thead><tr><th>Pos.</th><th>Größe</th><th>Profil</th><th>Notiz</th></tr></thead>
-      <tbody>${rows}</tbody></table></details>`;
-  }
-
-  function coverageBlock() {
-    const c = state.result?.meta?.coverage;
-    if (!c) return '';
-    const docs = c.documents || [];
-    const scanned = docs.filter((d) => d.scanned).length;
-    const imagePages = docs.reduce((a, d) => a + (d.imagePages?.length || 0), 0);
-    const bits = [`${c.pagesRead} von ${c.pages} Seiten gelesen`];
-    if (docs.length > 1) bits.push(`${docs.length} Dokumente`);
-    if (scanned) bits.push(`${scanned} Scan${scanned > 1 ? 's' : ''} per Bilderkennung`);
-    else if (imagePages) bits.push(`${imagePages} Bildseite${imagePages > 1 ? 'n' : ''} zusätzlich erkannt`);
-    if (state.result?.meta?.chunks > 1) bits.push(`in ${state.result.meta.chunks} Teilen ausgewertet`);
-
-    return `<div class="vms-coverage ${c.complete ? 'ok' : 'partial'}">
-      ${c.complete ? checkIcon() : alertIcon()}<span>${esc(bits.join(' · '))}</span></div>`;
-  }
-
-  /* --------------------------------------------------------- Tab Berechnet */
-
-  function calcTab() {
-    const r = state.result;
-    const n = computeNumbers(r, state.context);
-
-    const row = (label, value, hint, cls = '') =>
-      `<div class="vms-calc-row ${cls}">
-         <span class="vms-calc-label">${esc(label)}${hint ? `<small>${esc(hint)}</small>` : ''}</span>
-         <span class="vms-calc-value">${value}</span>
-       </div>`;
-
-    const repairRows = [];
-    if (n.documented !== null) {
-      repairRows.push(
-        row('Reparatur belegt', esc(fmtCost(n.documented)), `${n.documentedCount} von ${n.totalCount} Positionen beziffert`)
-      );
-    }
-    if (n.reportTotal !== null && n.reportTotal !== n.documented) {
-      repairRows.push(row('Summe laut Dokument', esc(fmtCost(n.reportTotal))));
-    }
-    if (n.urgent !== null) {
-      repairRows.push(
-        row('davon sicherheitsrelevant', esc(fmtCost(n.urgent)),
-          n.urgentOpen ? `+ ${n.urgentOpen} Position(en) ohne Betrag` : '', 'urgent')
-      );
-    }
-    if (n.withoutAmount) {
-      repairRows.push(row('Ohne Betrag im Dokument', `${n.withoutAmount} Position${n.withoutAmount > 1 ? 'en' : ''}`, '', 'open'));
-    }
-
-    // Gezählter Befund. Immer verfügbar, auch wenn das Dokument keinen einzigen
-    // Betrag nennt - beim Zustandsbericht ist das der Regelfall.
-    const factRows = [];
-    if (n.totalCount) {
-      factRows.push(row('Mängel gesamt', String(n.totalCount)));
-      if (n.critical) factRows.push(row('davon kritisch', String(n.critical), '', 'urgent'));
-      if (n.medium) factRows.push(row('davon mittel', String(n.medium)));
-    }
-    if (n.roadworthy) {
-      factRows.push(row('HU-/TÜV-relevant', `${n.roadworthy} von ${n.totalCount}`, '', 'urgent'));
-    }
-    if (n.tiresLow) {
-      factRows.push(
-        row('Reifen unter 3 mm', `${n.tiresLow} von ${n.tireCount}`,
-          n.minTread !== null ? `dünnstes Profil ${String(n.minTread).replace('.', ',')} mm` : '',
-          n.tiresIllegal ? 'urgent' : '')
-      );
-    }
-
-    const priceRows = [];
-    if (n.price !== null) {
-      priceRows.push(row('Angebotspreis', esc(fmtCost(n.price))));
-      if (n.effective !== null) {
-        priceRows.push(row('Effektivpreis', esc(fmtCost(n.effective)), 'Preis + belegte Reparatur', 'strong'));
-      }
-      if (n.target !== null) {
-        priceRows.push(row('Verhandlungsziel', esc(fmtCost(n.target)), 'Preis − Verhandlungshebel', 'target'));
-      }
-    } else if (n.negotiation !== null) {
-      priceRows.push(row('Verhandlungshebel gesamt', esc(fmtCost(n.negotiation)), '', 'target'));
-    }
-
-    if (!repairRows.length && !priceRows.length && !factRows.length) {
-      return `<div class="vms-empty muted">${calcIcon()}<div><strong>Nichts zu rechnen</strong>
-        <p>Im Dokument stehen keine Beträge, und auf der Seite wurde kein Preis gefunden.</p></div></div>`;
-    }
-
-    // Nach Bereich: mit Beträgen wird die Summe gezeigt, sonst die Anzahl der
-    // Befunde. So bleibt sichtbar, wo das Fahrzeug schwerpunktmäßig klemmt.
-    const hasAmounts = n.documented !== null;
-    const byCategory = {};
-    for (const d of r.defects) {
-      if (hasAmounts && typeof d.estimated_cost_eur !== 'number') continue;
-      const key = CATEGORY_LABEL[d.category] || d.category;
-      byCategory[key] = (byCategory[key] || 0) + (hasAmounts ? d.estimated_cost_eur : 1);
-    }
-    const cats = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
-    const max = cats.length ? cats[0][1] : 0;
-    const barValue = (sum) => (hasAmounts ? fmtCost(sum) : `${sum} Befund${sum > 1 ? 'e' : ''}`);
-
-    const costSection = repairRows.length || priceRows.length
-      ? `<section class="vms-calc">
-           <div class="vms-calc-head">${calcIcon()}<strong>Kosten</strong>
-             <span class="vms-calc-note">nur belegte Beträge</span></div>
-           ${repairRows.join('')}
-           ${repairRows.length && priceRows.length ? '<div class="vms-calc-sep"></div>' : ''}
-           ${priceRows.join('')}
-         </section>`
-      : '';
-
-    // Nennt das Dokument keine Beträge, sagt das Panel das offen, statt eine
-    // leere Kostenrechnung stehen zu lassen.
-    const noAmountHint = !hasAmounts && n.reportTotal === null && n.totalCount
-      ? `<p class="vms-calc-hint">Das Dokument beziffert keine Reparaturkosten. Gerechnet wird
-           deshalb nur mit dem, was belegt ist – gezählte Befunde statt geschätzter Summen.</p>`
-      : '';
-
-    const factSection = factRows.length
-      ? `<section class="vms-calc">
-           <div class="vms-calc-head">${eyeIcon()}<strong>Befund</strong>
-             <span class="vms-calc-note">aus dem Dokument gezählt</span></div>
-           ${factRows.join('')}
-         </section>`
-      : '';
-
-    return `
-      ${costSection}
-      ${noAmountHint}
-      ${factSection}
-      ${cats.length
-        ? `<section class="vms-bars">
-             <div class="vms-bars-head">Nach Bereich${hasAmounts ? '' : ' (Anzahl)'}</div>
-             ${cats
-               .map(
-                 ([name, sum], i) => `<div class="vms-bar" style="--i:${i}">
-                     <span class="vms-bar-label">${esc(name)}</span>
-                     <span class="vms-bar-track"><i style="--w:${Math.round((sum / max) * 100)}%"></i></span>
-                     <span class="vms-bar-value">${esc(barValue(sum))}</span>
-                   </div>`
-               )
-               .join('')}
-           </section>`
-        : ''}
-      ${negotiationBlock(r.verdict || {}, { open: !hasAmounts })}`;
-  }
-
-  function negotiationBlock(v, { open = false } = {}) {
-    if (!v.negotiation_points?.length) return '';
-    const sum = v.negotiation_points.reduce((a, p) => a + (p.amount_eur || 0), 0);
-    return `
-      <details class="vms-fold" ${state.expandAll || open ? 'open' : ''}>
-        <summary>${tagIcon()}<span>Verhandlungshebel (${v.negotiation_points.length})</span>
-          ${sum ? `<span class="vms-fold-sum">${esc(fmtCost(sum))}</span>` : ''}</summary>
-        <ul class="vms-negotiation">
-          ${v.negotiation_points
-            .map((p) => `<li><span>${esc(p.point)}</span>${p.amount_eur ? `<b>${esc(fmtCost(p.amount_eur))}</b>` : ''}</li>`)
-            .join('')}
-        </ul>
-      </details>`;
-  }
-
-  /* ----------------------------------------------------------- Tab Meinung */
-
-  function opinionTab() {
-    const r = state.result;
-    const v = r.verdict || {};
-    const meta = VERDICT_META[v.recommendation] || VERDICT_META.unklar;
-
-    return `
-      <section class="vms-verdict ${meta.tone}">
-        <div class="vms-verdict-glow" aria-hidden="true"></div>
-        <div class="vms-verdict-head">
-          ${scoreRing(v.score, meta.tone)}
-          <div class="vms-verdict-main">
-            <div class="vms-verdict-label">${verdictIcon(meta.icon)}<span>${meta.label}</span></div>
-            ${v.headline ? `<p class="vms-verdict-line">${esc(v.headline)}</p>` : ''}
-          </div>
-        </div>
-        ${v.reasons?.length
-          ? `<ul class="vms-reasons">${v.reasons.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>`
-          : ''}
-        ${v.price_assessment ? `<p class="vms-price">${tagIcon()}<span>${esc(v.price_assessment)}</span></p>` : ''}
-        <div class="vms-verdict-foot">
-          ${r.overall_condition && r.overall_condition !== 'unbekannt'
-            ? `<span class="vms-cond ${condClass(r.overall_condition)}">${esc(r.overall_condition)}</span>`
-            : ''}
-          ${r.confidence !== null ? `<span class="vms-conf">Sicherheit ${Math.round((r.confidence || 0) * 100)} %</span>` : ''}
-        </div>
-      </section>
-      ${listBlock(v.deal_breakers, 'bad', alertIcon(), 'Ausschlusskriterien')}
-      ${listBlock(v.before_first_drive, 'warn', wrenchIcon(), 'Vor der ersten Fahrt')}
-      ${dataBasisBlock(r, v)}
-      ${r.summary ? `<p class="vms-lead">${esc(r.summary)}</p>` : ''}
-      <p class="vms-disclaimer">Einschätzung allein aus den verlinkten Dokumenten – ersetzt keine
-        Besichtigung und keine Probefahrt.</p>`;
-  }
-
-  /**
-   * Was das Dokument NICHT hergibt. Bei "unklar" ist das die eigentliche
-   * Antwort - vorher stand dort nur die Vokabel ohne jede Begründung.
-   */
-  function dataBasisBlock(r, v) {
-    const missing = r.missing_info || [];
-    const unclear = v.recommendation === 'unklar';
-    // Außerhalb von "unklar" steht die Liste schon im Mängel-Tab - im engen
-    // Panel wäre eine zweite Kopie nur Rauschen.
-    if (!unclear) return '';
-    if (!missing.length) {
-      return `<section class="vms-callout muted">
-          <div class="vms-callout-head">${questionIcon()}<strong>Datenlage</strong></div>
-          <ul><li>Das Dokument enthält keine belastbaren Zustandsangaben, aus denen sich ein
-            Urteil ableiten ließe.</li></ul>
-        </section>`;
-    }
-    return `
-      <section class="vms-callout muted">
-        <div class="vms-callout-head">${questionIcon()}<strong>Warum unklar</strong></div>
-        <ul>${missing.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>
-      </section>`;
-  }
-
-  function scoreRing(score, tone) {
-    if (typeof score !== 'number') {
-      return `<div class="vms-ring empty ${tone}">${questionIcon()}</div>`;
-    }
-    const R = 22;
-    const circumference = 2 * Math.PI * R;
-    const offset = circumference * (1 - Math.min(100, Math.max(0, score)) / 100);
-    return `
-      <div class="vms-ring ${tone}">
-        <svg viewBox="0 0 52 52" width="52" height="52" aria-hidden="true">
-          <circle class="vms-ring-track" cx="26" cy="26" r="${R}" />
-          <circle class="vms-ring-value" cx="26" cy="26" r="${R}"
-            style="stroke-dasharray:${circumference.toFixed(1)};stroke-dashoffset:${circumference.toFixed(1)}"
-            data-offset="${offset.toFixed(1)}" />
-        </svg>
-        <span class="vms-ring-num">${score}</span>
-      </div>`;
-  }
-
-  function listBlock(items, tone, icon, title) {
-    if (!items?.length) return '';
-    return `
-      <section class="vms-callout ${tone}">
-        <div class="vms-callout-head">${icon}<strong>${title}</strong></div>
-        <ul>${items.map((x, i) => `<li style="--i:${i}">${esc(x)}</li>`).join('')}</ul>
-      </section>`;
-  }
-
   /* ---------------------------------------------------------------- Fuß */
 
   function footer() {
@@ -1898,48 +1537,6 @@
   }
 
   /* ------------------------------------------------------- Interaktionen */
-
-  /** Sucht direkt im DOM, damit der Cursor im Suchfeld nicht verloren geht. */
-  function attachSearch() {
-    const input = ui.root.querySelector('.vms-search');
-    if (!input) return;
-    input.addEventListener('input', () => {
-      state.search = input.value;
-      applySearch();
-    });
-    input.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Escape' && input.value) {
-        e.preventDefault();
-        input.value = '';
-        state.search = '';
-        applySearch();
-      }
-    });
-    if (state.search) {
-      applySearch();
-      input.focus();
-      input.setSelectionRange(input.value.length, input.value.length);
-    }
-  }
-
-  function applySearch() {
-    const q = state.search.trim().toLowerCase();
-    const cards = [...ui.root.querySelectorAll('.vms-defect')];
-    let hits = 0;
-    for (const card of cards) {
-      const match = !q || (card.dataset.search || '').includes(q);
-      card.hidden = !match;
-      if (match) hits++;
-    }
-    const hitBox = ui.root.querySelector('.vms-hits');
-    if (hitBox) {
-      hitBox.hidden = !q;
-      hitBox.textContent = `${hits} von ${cards.length} Mängeln`;
-    }
-    const empty = ui.root.querySelector('.vms-nohits');
-    if (empty) empty.hidden = !(q && hits === 0);
-  }
 
   /** Panel in Breite und Höhe anpassbar; die Größe bleibt gespeichert. */
   function attachResize() {

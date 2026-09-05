@@ -265,10 +265,15 @@ extension/
     options/, popup/       Einstellungen und Toolbar-Popup
     components/ui/         React-Komponenten (shadcn-Ablage)
       agent-dock.tsx       Chat-Leiste
-    content/main.tsx       Einstiegspunkt: Panel + React-Insel
+    content/main.tsx       Einstiegspunkt: Panel-Rahmen + React
+    content/panel.js       Rahmen: Kopf, Tab-Leiste, Fuß, Ziehen, Größe
+    content/panel-body.tsx Inhalt der Tabs (React)
+    content/tabs/          Mängel, Berechnet, Meinung, Icons
     content/chat-dock.tsx  Chat zum Dokument
     content/bridge.ts      Brücke zwischen Panel und React
     styles/tailwind.css    Tailwind-Einstieg
+    lib/result.ts          Typen des Analyseergebnisses
+    lib/format.ts          Beträge, Kostenrechnung
     lib/utils.ts           cn() – shadcn-Konvention
     lib/config.js          Defaults, Modelle, Preise
     lib/prompt.js          Prompts, JSON-Schemata, verlustfreies Chunking
@@ -306,6 +311,18 @@ Die React-Komponenten liegen in `extension/src/components/ui/` – die shadcn-Ab
 der Alias `@/components/ui` zeigt (siehe `tsconfig.json` und `vite.config.ts`). Wer `shadcn`
 per CLI nachrüsten will, findet den Pfad dort erwartungsgemäß vor; neue Komponenten kommen
 in denselben Ordner, damit Alias und CLI zusammenpassen.
+
+Die Aufteilung zwischen Panel und React: `content/panel.js` besitzt weiterhin den
+Shadow-Root und den Rahmen – Kopf, Tab-Leiste, Fuß, Ziehen und Größe. React besitzt den
+Inhalt (`.vms-body`) und den Chat darunter. Beide Knoten werden nach jedem Neuaufbau des
+Rahmens wieder eingehängt, damit React seinen Zustand behält: Suchtext, aufgeklappte Karten
+und Chatverlauf bleiben stehen. Zustand, der das Panel als Ganzes betrifft, fließt über
+`content/bridge.ts` zu React; was nur die Tabs angeht (Filter, Suche, Sortierung), gehört
+React allein.
+
+Noch nicht portiert sind die Diagnose-Ansicht und die Zustände vor dem Ergebnis (Laden,
+Fehler, Startbildschirm). Sie kommen weiterhin als HTML aus `panel.js` und werden von React
+eingehängt – eine klar abgegrenzte Naht, kein Dauerzustand.
 
 Tailwind läuft mit abgeschaltetem Preflight: das Panel lebt in einem Shadow-DOM, in dem es
 kein `html`/`body` gibt, auf das Preflight zielen könnte. Die Basiswerte setzt stattdessen

@@ -161,8 +161,12 @@ const q = (expr) => page.evaluate(`(() => { const r = ${ROOT}; return ${expr}; }
 await page.waitForFunction(`${ROOT}?.querySelector('#vms-react-root .vms-chat-input')`, null, { timeout: 15000 });
 check('Chat-Insel ist gemountet', await q(`Boolean(r.querySelector('#vms-react-root'))`), true);
 check('Kein Mikrofon-Knopf', await q(`[...r.querySelectorAll('#vms-react-root button')].some(b => /voice|mikro/i.test(b.textContent))`), false);
-check('Status nennt das gelesene Dokument',
-  await q(`r.querySelector('#vms-react-root p.text-xs')?.textContent.includes('gelesen')`), true);
+check('Status nennt die Regel',
+  await q(`r.querySelector('#vms-react-root p.text-xs')?.textContent.trim()`),
+  'Antwortet nur aus dem Dokument');
+// Das Kürzel im Knopf war nur Dekoration - ohne Taste dahinter gehört es weg.
+check('Kein vorgetäuschtes Tastenkürzel',
+  await q(`Boolean(r.querySelector('#vms-react-root kbd'))`), false);
 
 /** Öffnet den Composer, tippt die Frage und schickt sie mit Enter ab. */
 async function ask(question) {

@@ -4,6 +4,8 @@
  * Shadow-Root; React hört zu, statt den Zustand ein zweites Mal zu halten.
  */
 
+import type { AnalysisResult } from '@/lib/result';
+
 export type PanelDocument = {
   label?: string;
   url?: string;
@@ -13,16 +15,28 @@ export type PanelDocument = {
 
 export type PanelState = {
   status: 'idle' | 'busy' | 'done' | 'error';
+  view: 'main' | 'debug';
+  tab: 'maengel' | 'berechnet' | 'meinung';
   context: Record<string, string>;
-  result: {
-    meta?: { coverage?: { documents?: PanelDocument[] } };
-  } | null;
+  pageDamages: string[];
+  showAllPageDamages: boolean;
+  docs: { url?: string; label?: string }[];
+  result: AnalysisResult | null;
 };
 
 export const PANEL_EVENT = 'vms:state';
 export const READY_EVENT = 'vms:ready';
 
-type Bridge = { shadow: ShadowRoot; slot: HTMLElement; state: PanelState };
+type Bridge = {
+  shadow: ShadowRoot;
+  slot: HTMLElement;
+  body: HTMLElement;
+  state: PanelState;
+  /** HTML der noch nicht portierten Ansichten (Diagnose, Laden, Fehler). */
+  legacyBody: () => string;
+  /** Höhe von .vms-body im Moment des Tabwechsels, für den Übergang. */
+  morphFrom: number;
+};
 
 function bridge(): Bridge | null {
   return (globalThis as unknown as { __vmsBridge?: Bridge }).__vmsBridge ?? null;
@@ -43,6 +57,22 @@ export function panelShadow(): ShadowRoot | null {
 
 export function panelSlot(): HTMLElement | null {
   return bridge()?.slot ?? null;
+}
+
+export function panelBody(): HTMLElement | null {
+  return bridge()?.body ?? null;
+}
+
+export function legacyBody(): string {
+  try {
+    return bridge()?.legacyBody() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function morphFrom(): number {
+  return bridge()?.morphFrom ?? 0;
 }
 
 type Response = { ok: boolean; error?: string; answer?: string; code?: string };

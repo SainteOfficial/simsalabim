@@ -90,11 +90,7 @@ export function ChatDock() {
         agentName="Zum Dokument fragen"
         avatar={<FileTextIcon size={18} weight="bold" />}
         disabled={!ready}
-        idleStatus={
-          ready
-            ? `${documents.length} Dokument${documents.length === 1 ? '' : 'e'} gelesen · Antworten nur daraus`
-            : 'Kein gelesenes Dokument'
-        }
+        idleStatus={ready ? 'Antwortet nur aus dem Dokument' : 'Kein gelesenes Dokument'}
         onMessageSubmit={ask}
         workingStatus="Sucht im Dokument …"
       />
