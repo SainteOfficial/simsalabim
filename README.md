@@ -21,6 +21,9 @@ Die Rechnung und die Einschätzung liegen jeweils einen Klick daneben.
 | **Berechnet** | Kostenrechnung aus belegten Beträgen; nennt das Dokument keine, tritt der gezählte Befund an ihre Stelle. Dazu Bereichsverteilung und Verhandlungshebel |
 | **Meinung** | Kaufempfehlung mit Zustands-Score, Begründungen, Ausschlusskriterien – und bei „Unklar“ die fehlenden Angaben |
 
+Unter den Tabs sitzt der **Chat**: Fragen zum Dokument, beantwortet ausschließlich aus dem
+bereits gelesenen PDF.
+
 Auch der Kopf des Panels und das Toolbar-Symbol bleiben sachlich: dort steht die Zahl der
 Mängel, nicht das Urteil.
 
@@ -46,6 +49,23 @@ Mängel, nicht das Urteil.
 5. **Anzeigen** – Panel oben rechts: Kaufempfehlung, Zustands-Score, Kostenrechnung, Mängel
    nach Schwere sortiert und filterbar, TÜV-Relevanz, Reifenprofil, Verhandlungshebel,
    Seitenzahl und Beleg-Zitat pro Mangel.
+
+## Chat zum Dokument
+
+Unter dem Panel sitzt eine Eingabe: **Zum Dokument fragen**. Die Antwort kommt
+ausschließlich aus dem PDF, das die Extension ohnehin schon gelesen hat – kein Weltwissen,
+keine Schätzung. Steht die Antwort nicht im Dokument, sagt der Chat genau das.
+
+Was pro Frage an die KI geht, ist bewusst gedeckelt:
+
+| Teil | Warum |
+| --- | --- |
+| Dokumenttext (einmal, gekürzt auf `maxChars`) | die eigentliche Quelle; kommt aus dem Cache, das PDF wird nicht erneut gelesen |
+| Angaben von der Fahrzeugseite | FIN, Kilometer, Preis – damit Rückfragen dazu funktionieren |
+| die letzten **3** Frage/Antwort-Paare | Nachfragen wie „und was kostet das?" funktionieren, ohne dass der Verlauf unbegrenzt mitwächst |
+
+Ältere Runden fallen heraus. Der Tokenverbrauch pro Frage bleibt damit vorhersehbar,
+statt mit jeder Frage weiterzuwachsen.
 
 ## Kaufempfehlung
 
@@ -243,6 +263,13 @@ extension/
     content/panel.css      Panel-Design, hell/dunkel, Morph-Animationen
     offscreen/             pdf.js-Textextraktion + Seitenrendering (SW hat kein DOM)
     options/, popup/       Einstellungen und Toolbar-Popup
+    components/ui/         React-Komponenten (shadcn-Ablage)
+      agent-dock.tsx       Chat-Leiste
+    content/main.tsx       Einstiegspunkt: Panel + React-Insel
+    content/chat-dock.tsx  Chat zum Dokument
+    content/bridge.ts      Brücke zwischen Panel und React
+    styles/tailwind.css    Tailwind-Einstieg
+    lib/utils.ts           cn() – shadcn-Konvention
     lib/config.js          Defaults, Modelle, Preise
     lib/prompt.js          Prompts, JSON-Schemata, verlustfreies Chunking
     lib/openrouter.js      API-Client mit Retry, Timeout, Kostenermittlung
@@ -250,19 +277,56 @@ extension/
   vendor/pdfjs/            pdf.js 3.11.174 (Apache-2.0), lokal eingebunden
 test/
   e2e.mjs                  End-to-End-Test mit echtem Chromium
+  chat.mjs                 Chat: Kontext, Verlaufsdeckel, Freitext-Antwort
   bca-viewpdf.mjs          Dokumentenabruf über zwei Origins (BCA-Topologie)
   tabs-sparse.mjs          Berechnet/Meinung bei dünner Datenlage
   make-fixtures.py         erzeugt die Test-PDFs neu
   fixtures/                Testseiten, Test-PDFs, Mock-Antwort
 ```
 
+## Bauen und laden
+
+Die Extension wird gebaut: React, TypeScript und Tailwind brauchen einen Build-Schritt.
+
+```bash
+npm install
+npm run build      # erzeugt extension/dist/
+npm run dev        # dasselbe im Watch-Modus
+```
+
+Danach in Chrome unter `chrome://extensions` → **Entpackte Erweiterung laden** den Ordner
+`extension/` wählen. `extension/dist/` ist nicht eingecheckt – ohne `npm run build` fehlt der
+Extension ihr Code.
+
+Warum kein Dev-Server mit HMR: MV3 verbietet `unsafe-eval`, und genau das braucht Vites
+HMR-Laufzeit. `npm run dev` baut deshalb bei jeder Änderung neu; in Chrome reicht dann ein
+Klick auf **Neu laden** bei der Extension.
+
+Die React-Komponenten liegen in `extension/src/components/ui/` – die shadcn-Ablage, auf die
+der Alias `@/components/ui` zeigt (siehe `tsconfig.json` und `vite.config.ts`). Wer `shadcn`
+per CLI nachrüsten will, findet den Pfad dort erwartungsgemäß vor; neue Komponenten kommen
+in denselben Ordner, damit Alias und CLI zusammenpassen.
+
+Tailwind läuft mit abgeschaltetem Preflight: das Panel lebt in einem Shadow-DOM, in dem es
+kein `html`/`body` gibt, auf das Preflight zielen könnte. Die Basiswerte setzt stattdessen
+`.vms-app` in `extension/src/styles/tailwind.css`. Das kompilierte CSS wird als Text ins
+Bundle gezogen (`?inline`) und in den Shadow-Root gehängt – von außen greift dort kein
+Stylesheet.
+
 ## Tests
 
 ```bash
-npm install -D playwright        # Chromium wird benötigt
+npm install
+npm test        # baut die Extension und lässt alle vier Suiten laufen
+```
+
+Einzeln geht auch, nach einem `npm run build`:
+
+```bash
 node test/e2e.mjs
 node test/bca-viewpdf.mjs
 node test/tabs-sparse.mjs
+node test/chat.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension

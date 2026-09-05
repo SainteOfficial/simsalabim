@@ -17,7 +17,10 @@ import {
   chunkPrompt,
   synthesisPrompt,
   visionUserPrompt,
-  splitIntoChunks
+  splitIntoChunks,
+  chatSystemPrompt,
+  chatDocumentPrompt,
+  CHAT_HISTORY_TURNS
 } from './lib/prompt.js';
 import { chat, parseJsonLoose, testKey, OpenRouterError } from './lib/openrouter.js';
 import * as cache from './lib/cache.js';
@@ -798,6 +801,9 @@ async function analyze({ tabId, pageContext, docs, force }) {
       documents: parsed.map((d) => ({
         label: d.label,
         url: d.url,
+        // Über den Hash holt der Chat den bereits extrahierten Text aus dem
+        // Cache zurück, ohne das PDF ein zweites Mal zu lesen.
+        hash: d.hash,
         pages: d.pageCount,
         pagesRead: d.parsedPages,
         chars: d.charCount,
@@ -991,6 +997,77 @@ function dedupeTires(tires) {
   return [...byPos.values()];
 }
 
+/* ------------------------------------------------------------------- Chat */
+
+/**
+ * Beantwortet eine Frage zum Dokument. Der Text kommt aus dem Cache - das PDF
+ * wurde bei der Analyse schon gelesen und wird nicht erneut geholt.
+ *
+ * Token-Politik: der Dokumenttext geht einmal pro Frage mit, dazu die letzten
+ * CHAT_HISTORY_TURNS Frage/Antwort-Paare. Damit funktionieren Nachfragen wie
+ * "und was kostet das?", ohne dass der Verlauf unbegrenzt mitwächst.
+ */
+async function chatAboutDocument({ question, history, documents, pageContext, signal }) {
+  const settings = await getSettings();
+  if (!settings.apiKey) {
+    const err = new Error('Kein OpenRouter API-Key hinterlegt.');
+    err.code = 'NO_API_KEY';
+    throw err;
+  }
+  const text = String(question || '').trim();
+  if (!text) throw new Error('Keine Frage übergeben.');
+
+  const loaded = [];
+  for (const doc of documents || []) {
+    if (!doc?.hash) continue;
+    const cached = await cache.getText(doc.hash);
+    if (cached?.text) loaded.push({ label: doc.label, text: cached.text });
+  }
+  if (!loaded.length) {
+    const err = new Error(
+      'Der Dokumenttext liegt nicht mehr vor. Bitte die Analyse einmal neu starten ("Neu").'
+    );
+    err.code = 'NO_TEXT';
+    throw err;
+  }
+
+  // Nur vollständige Paare, neueste zuletzt - alles ältere fällt weg.
+  const turns = [];
+  for (const entry of (history || []).slice(-CHAT_HISTORY_TURNS * 2)) {
+    if (entry?.role !== 'user' && entry?.role !== 'assistant') continue;
+    if (!entry.content) continue;
+    turns.push({ role: entry.role, content: String(entry.content).slice(0, 4000) });
+  }
+
+  const res = await chat({
+    apiKey: settings.apiKey,
+    apiBase: settings.apiBase,
+    model: settings.model,
+    signal,
+    plainText: true,
+    maxTokens: 1200,
+    messages: [
+      { role: 'system', content: chatSystemPrompt(settings.outputLanguage) },
+      {
+        role: 'user',
+        content: chatDocumentPrompt({
+          pageContext,
+          documents: loaded,
+          maxChars: settings.maxChars
+        })
+      },
+      {
+        role: 'assistant',
+        content: 'Dokument gelesen. Ich beantworte Fragen ausschließlich daraus.'
+      },
+      ...turns,
+      { role: 'user', content: text.slice(0, 2000) }
+    ]
+  });
+
+  return { answer: String(res.content || '').trim(), usage: res.usage };
+}
+
 /* ------------------------------------------------------------ Toolbar-Badge */
 
 async function setBadge(tabId, state, result) {
@@ -1068,6 +1145,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             code: err?.code || (err instanceof OpenRouterError ? 'API' : 'GENERIC')
           });
         });
+      return true;
+    }
+
+    case 'CHAT': {
+      const controller = new AbortController();
+      chatAboutDocument({ ...msg.payload, signal: controller.signal })
+        .then((r) => sendResponse({ ok: true, ...r }))
+        .catch((err) =>
+          sendResponse({
+            ok: false,
+            error: String(err?.message || err),
+            code: err?.code || (err instanceof OpenRouterError ? 'API' : 'GENERIC')
+          })
+        );
       return true;
     }
 

@@ -57,6 +57,9 @@ export async function chat({
   model,
   messages,
   schema,
+  // Freitext-Antwort. Ohne das erzwingt der Client JSON - richtig für die
+  // Analyse, falsch für den Chat, der Sätze zurückgeben soll.
+  plainText = false,
   timeoutMs = 240000,
   maxRetries = 2,
   maxTokens = 4000,
@@ -78,7 +81,7 @@ export async function chat({
     };
     if (useSchema) {
       body.response_format = { type: 'json_schema', json_schema: schema };
-    } else {
+    } else if (!plainText) {
       body.response_format = { type: 'json_object' };
     }
 

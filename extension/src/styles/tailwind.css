@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Preflight ist abgeschaltet (siehe tailwind.config.js): im Shadow-DOM gibt es
+ * kein html/body, auf das es zielen könnte. Die Basiswerte setzt deshalb der
+ * Wurzelknoten der React-Insel selbst.
+ */
+.vms-app {
+  color: var(--vms-text);
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  box-sizing: border-box;
+}
+.vms-app *,
+.vms-app *::before,
+.vms-app *::after {
+  box-sizing: inherit;
+}
+.vms-app button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.vms-app textarea {
+  font: inherit;
+  color: inherit;
+}
+.vms-app p,
+.vms-app ul,
+.vms-app li {
+  margin: 0;
+  padding: 0;
+}

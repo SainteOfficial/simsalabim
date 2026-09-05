@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Autosmaya",
   "short_name": "Autosmaya",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Liest auf de.bca-europe.com den Zustandsbericht automatisch aus, listet alle Mängel, rechnet die Kosten und gibt eine Kaufempfehlung.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -14,7 +14,7 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "src/background.js",
+    "service_worker": "dist/background.js",
     "type": "module"
   },
   "content_scripts": [
@@ -27,7 +27,7 @@
         "https://*.bca-autoauktionen.de/*"
       ],
       "js": [
-        "src/content/content.js"
+        "dist/content.js"
       ],
       "run_at": "document_idle",
       "all_frames": false

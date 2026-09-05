@@ -463,3 +463,58 @@ function pageRangeOf(text) {
   const max = Math.max(...nums);
   return min === max ? String(min) : `${min}-${max}`;
 }
+
+/* ----------------------------------------------------------------- Chat */
+
+/** So viele Frage/Antwort-Paare gehen als Verlauf mit. Mehr kostet nur Token. */
+export const CHAT_HISTORY_TURNS = 3;
+
+/**
+ * Der Chat beantwortet Fragen ausschließlich aus dem gelesenen Dokument.
+ * Kein Weltwissen, keine Schätzungen - dieselbe Regel wie bei der Analyse.
+ */
+export function chatSystemPrompt(lang = 'de') {
+  return [
+    'Du beantwortest Fragen zu einem Fahrzeugdokument, das dir vollständig vorliegt.',
+    '',
+    'Harte Regeln:',
+    '1. Antworte ausschließlich aus dem Dokumenttext und den Seitenangaben unten.',
+    '2. Steht die Antwort nicht im Dokument, sage genau das - klar und in einem Satz.',
+    '   Nicht raten, nichts aus Modell, Baujahr oder Erfahrung ableiten.',
+    '3. Nenne bei konkreten Angaben die Seite, z.B. "(Seite 4)".',
+    '4. Zitiere wörtlich, wenn ein Zitat die Antwort belegt.',
+    '5. Fasse dich kurz: zwei bis fünf Sätze, Listen nur wenn sie wirklich helfen.',
+    '6. Keine Kaufempfehlung und keine Preisschätzung - dafür gibt es die Tabs im Panel.',
+    '',
+    `Sprache: ${LANG_LABEL[lang] || 'Deutsch'}.`
+  ].join('\n');
+}
+
+/** Der Dokumentteil der Chat-Anfrage. Steht einmal ganz oben, nicht je Runde. */
+export function chatDocumentPrompt({ pageContext, documents, maxChars }) {
+  const ctx = Object.entries(pageContext || {})
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n');
+
+  let budget = maxChars;
+  const parts = [];
+  for (const doc of documents || []) {
+    if (budget <= 0) break;
+    const text = String(doc.text || '');
+    const slice = text.slice(0, budget);
+    budget -= slice.length;
+    parts.push(
+      `--- Dokument: ${doc.label || 'Unbenannt'} ---\n${slice}` +
+        (slice.length < text.length ? '\n[… gekürzt]' : '')
+    );
+  }
+
+  return [
+    ctx ? `Angaben von der Fahrzeugseite:\n${ctx}\n` : '',
+    'Dokumenttext:',
+    parts.join('\n\n')
+  ]
+    .filter(Boolean)
+    .join('\n');
+}

@@ -919,7 +919,15 @@
     shadow.append(style, root);
     (document.body || document.documentElement).appendChild(host);
 
-    ui = { host, shadow, root };
+    // Platz für die React-Insel. Das Panel setzt bei jedem render() sein
+    // innerHTML neu - der Slot wird danach wieder angehängt, damit React
+    // seinen Zustand behält, statt bei jedem Klick neu zu starten.
+    const slot = document.createElement('div');
+    slot.id = 'vms-react-root';
+
+    ui = { host, shadow, root, slot };
+    globalThis.__vmsBridge = { shadow, slot, state: publicState() };
+    document.dispatchEvent(new CustomEvent('vms:ready'));
     applyStoredPosition();
     root.addEventListener('click', onClick);
     root.addEventListener('change', (e) => {
@@ -1165,6 +1173,24 @@
 
   /* ------------------------------------------------------------ Grundgerüst */
 
+  /** Der Ausschnitt des Zustands, den die React-Insel sieht. Bewusst schmal. */
+  function publicState() {
+    return { status: state.status, context: state.context, result: state.result };
+  }
+
+  let lastPublished = '';
+
+  /** Meldet den Zustand an die React-Insel, aber nur wenn sich etwas geändert hat. */
+  function publishState() {
+    if (!ui) return;
+    const next = publicState();
+    const signature = `${next.status}|${next.result?.meta?.ts || ''}|${Object.keys(next.context || {}).length}`;
+    globalThis.__vmsBridge = { shadow: ui.shadow, slot: ui.slot, state: next };
+    if (signature === lastPublished) return;
+    lastPublished = signature;
+    document.dispatchEvent(new CustomEvent('vms:state', { detail: next }));
+  }
+
   function render() {
     if (!ui) return;
     const { root } = ui;
@@ -1182,6 +1208,11 @@
           `<div class="vms-body" data-tab="${state.tab}">${tabContent()}</div>` +
           footer() +
           '<div class="vms-resize" title="Größe ändern" aria-hidden="true"></div>');
+
+    // Der Slot überlebt das innerHTML oben, weil er danach wieder angehängt
+    // wird - React behält damit Verlauf und Eingabe im Chat.
+    if (!state.collapsed && ui.slot) root.appendChild(ui.slot);
+    publishState();
 
     attachDrag();
     attachResize();
