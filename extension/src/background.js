@@ -205,13 +205,55 @@ function findPdfInHtml(html, baseUrl) {
   return null;
 }
 
+const HTML_ENTITIES = { '&amp;': '&', '&#38;': '&', '&quot;': '"', '&#34;': '"', '&#39;': "'", '&apos;': "'", '&lt;': '<', '&gt;': '>' };
+const unescapeHtml = (s) => String(s).replace(/&(?:amp|#38|quot|#34|#39|apos|lt|gt);/g, (e) => HTML_ENTITIES[e] ?? e);
+
+/**
+ * Die Warteseite von BCA ("Ihre PDF ist in Vorbereitung. Bitte warten …")
+ * besteht nur aus einem Skript und einem leeren
+ * <form method="post" action="./ViewPDF.aspx?VehId=…">, das die Seite nach
+ * kurzer Zeit selbst abschickt. Erst dieser POST liefert das PDF - ein
+ * erneutes GET bringt endlos wieder dieselbe Warteseite. Hier wird das
+ * Formular so nachgebaut, wie es der Browser abschicken würde.
+ */
+function findFormPost(html, baseUrl) {
+  if (!html) return null;
+  for (const m of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+    const attrs = m[1] || '';
+    if (!/method\s*=\s*["']?post/i.test(attrs)) continue;
+
+    const action = unescapeHtml((attrs.match(/action\s*=\s*["']([^"']*)["']/i)?.[1] || '').trim());
+    let resolved;
+    try {
+      resolved = new URL(action || baseUrl, baseUrl).href;
+    } catch {
+      continue;
+    }
+    if (!isProbablePdfUrl(resolved)) continue;
+
+    // ASP.NET schickt __VIEWSTATE & Co. mit - ohne die weist der Server ab.
+    const body = new URLSearchParams();
+    for (const inp of (m[2] || '').matchAll(/<input\b([^>]*)>/gi)) {
+      const a = inp[1] || '';
+      const name = a.match(/name\s*=\s*["']([^"']*)["']/i)?.[1];
+      if (!name) continue;
+      const kind = (a.match(/type\s*=\s*["']([^"']*)["']/i)?.[1] || 'text').toLowerCase();
+      if ((kind === 'checkbox' || kind === 'radio') && !/\bchecked\b/i.test(a)) continue;
+      body.append(name, unescapeHtml(a.match(/value\s*=\s*["']([^"']*)["']/i)?.[1] || ''));
+    }
+    return { action: resolved, body: body.toString() };
+  }
+  return null;
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const WAITING_RE = /in Vorbereitung|Bitte warten|wird vorbereitet|wird generiert|being prepared|please wait|is generating/i;
 
 const MAX_WAIT_ROUNDS = 20;
 const WAIT_INTERVAL_MS = 3000;
 // Nach so vielen erfolglosen Warterunden wird die Seite einmal echt geöffnet.
-const PRIME_AFTER_ROUNDS = 2;
+// Der Normalfall (Formular abschicken) ist lange vorher durch.
+const PRIME_AFTER_ROUNDS = 6;
 
 /**
  * Öffnet die Adresse einmal in einem echten Hintergrund-Tab und schließt ihn
@@ -261,7 +303,7 @@ async function primeInTab(url, signal) {
  * bekommt.
  */
 async function fetchPdfInBackground(url, signal, opts = {}) {
-  const { depth = 0, waitCount = 0, primed = false, pollUrl = null, deadline = 0 } = opts;
+  const { depth = 0, waitCount = 0, primed = false, pollUrl = null, deadline = 0, postBody = null } = opts;
   if (depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
   if (waitCount > MAX_WAIT_ROUNDS || (deadline && Date.now() > deadline)) {
     throw new Error('Das PDF wird vom Portal noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
@@ -272,13 +314,19 @@ async function fetchPdfInBackground(url, signal, opts = {}) {
   const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
   try {
     res = await fetch(cleanUrl, {
+      method: postBody === null ? 'GET' : 'POST',
+      body: postBody,
       credentials: 'include',
       signal,
       redirect: 'follow',
       cache: 'no-store',
-      // Bewusst nur "Accept": Cache-Control/Pragma sind keine CORS-sicheren
-      // Header und machen jede Anfrage präflight-pflichtig.
-      headers: { 'Accept': 'application/pdf, application/octet-stream, text/html, */*' }
+      // Bewusst nur "Accept" und der Formular-Content-Type: Cache-Control und
+      // Pragma sind keine CORS-sicheren Header und machen jede Anfrage
+      // präflight-pflichtig.
+      headers: {
+        'Accept': 'application/pdf, application/octet-stream, text/html, */*',
+        ...(postBody === null ? {} : { 'Content-Type': 'application/x-www-form-urlencoded' })
+      }
     });
   } catch (err) {
     if (signal?.aborted) throw new Error('PDF-Download wurde abgebrochen.');
@@ -305,7 +353,27 @@ async function fetchPdfInBackground(url, signal, opts = {}) {
       html = new TextDecoder().decode(buf);
     } catch { /* decode-Fehler ignorieren */ }
 
-    // Warteseite: dieselbe Adresse erneut abfragen. Das Ziel darf nur ein
+    // Warteseite mit eigenem Formular: so weitermachen, wie es die Seite selbst
+    // tut - das Formular abschicken. Das ist der einzige Weg, der bei BCA zum
+    // PDF führt; ein erneutes GET liefert immer wieder die Warteseite.
+    const form = findFormPost(html, res.url || cleanUrl);
+    if (form && waitCount < MAX_WAIT_ROUNDS) {
+      let nowPrimed = primed;
+      if (!primed && waitCount >= PRIME_AFTER_ROUNDS) {
+        nowPrimed = (await primeInTab(pollUrl || cleanUrl, signal)) || primed;
+      }
+      await sleep(WAIT_INTERVAL_MS);
+      return fetchPdfInBackground(form.action, signal, {
+        depth,
+        waitCount: waitCount + 1,
+        primed: nowPrimed,
+        pollUrl: pollUrl || cleanUrl,
+        deadline,
+        postBody: form.body
+      });
+    }
+
+    // Ohne Formular: dieselbe Adresse erneut abfragen. Das Ziel darf nur ein
     // echtes Meta-Refresh verschieben - ein beliebiger Link aus der Warteseite
     // (etwa ein Erzeugungs-Endpunkt) führt sonst aus dem Poll heraus und der
     // Download bricht mit "Antwort ist kein PDF" ab.

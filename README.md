@@ -34,9 +34,10 @@ Mängel, nicht das Urteil.
    Ohne gefundenes Dokument erscheint kein Panel.
 2. **Laden** – holt Dokumente vom selben Ursprung wie die Fahrzeugseite direkt im
    Seitenkontext; alles andere lädt der Hintergrunddienst, der als First-Party-Anfrage
-   läuft und die bestehende Anmeldung beim Händler-/Auktionsportal mitschickt. Wird das
-   Dokument erst erzeugt, wartet die Extension auf derselben Adresse und öffnet sie
-   dazwischen einmal kurz in einem Hintergrund-Tab.
+   läuft und die bestehende Anmeldung beim Händler-/Auktionsportal mitschickt.
+   Antwortet das Portal mit einer Warteseite („Ihre PDF ist in Vorbereitung"), schickt
+   die Extension deren Formular genauso ab wie die Seite es selbst täte – bei BCA ist
+   dieser POST der einzige Weg zum PDF.
 3. **Lesen** – extrahiert den Text lokal mit **pdf.js**, spaltenerhaltend, damit Tabellen aus
    Zustandsberichten erhalten bleiben. Siehe [Vollständigkeit](#vollständigkeit).
 4. **Analysieren** – OpenRouter (Standard `amazon/nova-2-lite-v1`) mit **Structured Output**
@@ -285,10 +286,14 @@ ungepackt in Chromium und prüft 95 Punkte, unter anderem:
 `test/bca-viewpdf.mjs` bildet zusätzlich die echte BCA-Topologie nach: Fahrzeugseite und
 Dokument liegen auf **verschiedenen Origins**, das Dokument ist nur mit Session-Cookie
 abrufbar und entsteht in einem der beiden Fälle erst, wenn das JavaScript der Portalseite
-läuft. Der Test prüft 14 Punkte – unter anderem, dass der Abruf über den Hintergrunddienst
-läuft (kein CORS-Fehler in der Seite), dass jede Anfrage die Session trägt, dass der
-Warte-Poll nicht auf einen fremden Endpunkt abbiegt und dass die Seite dafür als echtes
-Dokument geöffnet wird statt als iFrame.
+läuft. Dazu kommt der echte BCA-Fall: Fahrzeugseite und Dokument auf demselben Origin, und
+eine Warteseite, die exakt so aufgebaut ist wie das Original – kein Meta-Refresh, kein
+Link auf das PDF, nur ein Skript und ein leeres
+`<form method="post" action="./ViewPDF.aspx?VehId=…">` mit `__VIEWSTATE`. Der Test prüft
+20 Punkte – unter anderem, dass der Abruf über den Hintergrunddienst läuft (kein
+CORS-Fehler in der Seite), dass jede Anfrage die Session trägt, dass der Warte-Poll nicht
+auf einen fremden Endpunkt abbiegt, und dass die Warteseite per POST weitergeführt wird
+statt endlos per GET.
 
 Beim ersten Lauf erzeugen die Tests mit `openssl` selbstsignierte Wegwerf-Zertifikate für
 die Testhosts unter `test/fixtures/cert/` bzw. `test/fixtures/cert-<host>/` (nicht
@@ -299,11 +304,11 @@ Mit `MOCK_DELAY_MS=2000` lässt sich der Ladezustand in Ruhe betrachten.
 
 ## Grenzen
 
-- PDFs, die sich nur über ein Formular (POST) herunterladen lassen, kann die Extension
-  nicht abrufen; sie meldet das im Panel. Erzeugt das Portal das Dokument dagegen erst
-  beim Öffnen der Seite, öffnet die Extension die Adresse einmal kurz in einem
-  Hintergrund-Tab und schließt ihn wieder – anders lässt sich das Skript der Portalseite
-  nicht anstoßen.
+- Warteseiten mit eigenem POST-Formular (wie der BCA-Preloader) führt die Extension
+  selbst weiter, samt versteckter ASP.NET-Felder. Bleibt das Dokument auch danach aus,
+  öffnet sie die Adresse als letzten Versuch einmal kurz in einem Hintergrund-Tab und
+  schließt ihn wieder. Formulare, die eine echte Nutzereingabe brauchen, kann sie nicht
+  abrufen; sie meldet das im Panel.
 - Passwortgeschützte PDFs werden nicht geöffnet.
 - Die Auswertung ist so gut wie das Dokument: Was nicht im Zustandsbericht steht, taucht auch
   nicht im Panel auf, und die Kaufempfehlung kann nur bewerten, was dokumentiert ist. Deshalb

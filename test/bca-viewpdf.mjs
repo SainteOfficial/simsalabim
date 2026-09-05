@@ -63,10 +63,65 @@ function certificate(cn) {
 
 /* --------------------------------------------------------------- Server */
 
+/**
+ * Die Warteseite von BCA, so aufgebaut wie im Original: kein Meta-Refresh,
+ * kein Link auf das PDF - nur ein Skript und ein Formular, das die Seite selbst
+ * per POST an dieselbe Adresse abschickt.
+ */
+function preloader(veh) {
+  return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta http-equiv="CACHE-CONTROL" content="NO-CACHE" />
+<meta http-equiv="PRAGMA" content="NO-CACHE" />
+<meta http-equiv="EXPIRES" content="Mon, 22 Jul 2002 11:12:01 GMT" />
+<link href="../Styles/Preloader.css" rel="stylesheet" type="text/css" /><title></title>
+</head><body class="PDF">
+<script type="text/javascript">
+document.write('Ihre PDF ist in Vorbereitung. Bitte warten ...');
+setTimeout(function () { document.frmViewPDF.submit(); }, 400);
+<\/script>
+<form name="frmViewPDF" method="post" action="./ViewPDF.aspx?VehId=${veh}&amp;Index=5&amp;SubIndex=6&amp;LotId=23891649&amp;SourceSystem=PEEP" id="frmViewPDF" onkeypress="return validateEnterKey(event)">
+<input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="/wEPDwUKMTIzNDU2Nzg5MGRk" />
+<input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="/wEWAgL9x9m9CQ==" />
+</form></body></html>`;
+}
+
 // Fahrzeugseite: setzt die Session wie ASP.NET (ohne SameSite -> Chrome: Lax)
 // und verlinkt das Dokument auf dem zweiten Origin.
+const siteRequests = [];
+const sitePostsSeen = new Map();
+
 const siteServer = https.createServer(certificate(SITE_HOST), (req, res) => {
   const u = new URL(req.url, `https://${SITE_HOST}`);
+
+  // Der echte BCA-Endpunkt: liegt auf demselben Origin wie die Fahrzeugseite,
+  // antwortet auf GET mit der Preloader-Seite und liefert das PDF erst, wenn
+  // deren Formular per POST abgeschickt wird (ASP.NET-Postback).
+  if (u.pathname === '/Classic/Pages/ViewPDF.aspx') {
+    const veh = u.searchParams.get('VehId') || '';
+    siteRequests.push({ method: req.method, veh, dest: req.headers['sec-fetch-dest'] || null });
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        const posts = (sitePostsSeen.get(veh) || 0) + 1;
+        sitePostsSeen.set(veh, posts);
+        // Erst der zweite Postback liefert das PDF - das Portal braucht Zeit -
+        // und nur, wenn die versteckten ASP.NET-Felder mitkommen.
+        if (posts < 2 || !body.includes('__VIEWSTATE=')) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(preloader(veh));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/pdf' }).end(PDF);
+      });
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(preloader(veh));
+    return;
+  }
+
   if (u.pathname !== '/lot') {
     res.writeHead(404).end('not found');
     return;
@@ -78,7 +133,7 @@ const siteServer = https.createServer(certificate(SITE_HOST), (req, res) => {
   });
   res.end(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Volkswagen Touran 2.0 TDI</title></head>
 <body><h1>Volkswagen Touran 2.0 TDI</h1>
-<p><a href="https://${DOC_HOST}/Classic/Pages/ViewPDF.aspx?VehId=${id}&Index=5&SubIndex=6">Fahrzeug PDF</a></p>
+<p><a href="${id.includes('-') ? '' : `https://${DOC_HOST}`}/Classic/Pages/ViewPDF.aspx?VehId=${id}&Index=5&SubIndex=6&LotId=23891649&SourceSystem=PEEP">Fahrzeug PDF</a></p>
 <table>
 <tr><td>Fahrgestellnummer</td><td>WVGZZZ1T4PW004548</td></tr>
 <tr><td>Erstzulassung</td><td>16/11/2022</td></tr>
@@ -252,6 +307,32 @@ async function run(id, timeout) {
     'Warteseite: die Seite selbst hat die Erzeugung gerufen',
     docRequests.some((d) => d.path.endsWith('GeneratePDF.aspx') && d.site === 'same-origin'),
     true
+  );
+}
+
+/* 3 - der echte BCA-Fall: gleicher Origin, Preloader mit POST-Formular */
+{
+  siteRequests.length = 0;
+  const before = apiCalls;
+  const r = await run('944cb073-7fe2-4218-b228-b7ad5d7f49f3', 120000);
+  check('Preloader: Analyse läuft durch', r.status, 'done');
+  check('Preloader: kein Fehler', r.error, null);
+  check('Preloader: ein API-Aufruf', apiCalls - before, 1);
+  // Das ist der Kern: die Warteseite kommt nur durch einen POST weiter.
+  check(
+    'Preloader: das Formular wurde abgeschickt',
+    siteRequests.filter((d) => d.method === 'POST').length > 0,
+    true
+  );
+  check(
+    'Preloader: kein endloses GET-Pollen',
+    siteRequests.filter((d) => d.method === 'GET').length <= 3,
+    true
+  );
+  check(
+    'Preloader: der Normalfall braucht keinen Hintergrund-Tab',
+    siteRequests.some((d) => d.dest === 'document'),
+    false
   );
 }
 

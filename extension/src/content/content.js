@@ -509,8 +509,50 @@
     }
   }
 
-  async function fetchPdfInPage(url, _depth = 0, _waitCount = 0) {
-    if (_depth > 4 || _waitCount > MAX_WAIT_ROUNDS) return null;
+  const HTML_ENTITIES = { '&amp;': '&', '&#38;': '&', '&quot;': '"', '&#34;': '"', '&#39;': "'", '&apos;': "'", '&lt;': '<', '&gt;': '>' };
+  const unescapeHtml = (s) => String(s).replace(/&(?:amp|#38|quot|#34|#39|apos|lt|gt);/g, (e) => HTML_ENTITIES[e] ?? e);
+
+  /**
+   * Die Warteseite von BCA ("Ihre PDF ist in Vorbereitung. Bitte warten …")
+   * besteht nur aus einem Skript und einem leeren
+   * <form method="post" action="./ViewPDF.aspx?VehId=…">, das die Seite nach
+   * kurzer Zeit selbst abschickt. Erst dieser POST liefert das PDF - ein
+   * erneutes GET bringt endlos wieder dieselbe Warteseite. Hier wird das
+   * Formular so nachgebaut, wie es der Browser abschicken würde.
+   */
+  function findFormPost(html, baseUrl) {
+    if (!html) return null;
+    for (const m of html.matchAll(/<form\b([^>]*)>([\s\S]*?)<\/form>/gi)) {
+      const attrs = m[1] || '';
+      if (!/method\s*=\s*["']?post/i.test(attrs)) continue;
+
+      const action = unescapeHtml((attrs.match(/action\s*=\s*["']([^"']*)["']/i)?.[1] || '').trim());
+      let resolved;
+      try {
+        resolved = new URL(action || baseUrl, baseUrl).href;
+      } catch {
+        continue;
+      }
+      if (!isProbablePdfUrl(resolved)) continue;
+
+      // ASP.NET schickt __VIEWSTATE & Co. mit - ohne die weist der Server ab.
+      const body = new URLSearchParams();
+      for (const inp of (m[2] || '').matchAll(/<input\b([^>]*)>/gi)) {
+        const a = inp[1] || '';
+        const name = a.match(/name\s*=\s*["']([^"']*)["']/i)?.[1];
+        if (!name) continue;
+        const kind = (a.match(/type\s*=\s*["']([^"']*)["']/i)?.[1] || 'text').toLowerCase();
+        if ((kind === 'checkbox' || kind === 'radio') && !/\bchecked\b/i.test(a)) continue;
+        body.append(name, unescapeHtml(a.match(/value\s*=\s*["']([^"']*)["']/i)?.[1] || ''));
+      }
+      return { action: resolved, body: body.toString() };
+    }
+    return null;
+  }
+
+  async function fetchPdfInPage(url, opts = {}) {
+    const { depth = 0, waitCount = 0, postBody = null } = opts;
+    if (depth > 4 || waitCount > MAX_WAIT_ROUNDS) return null;
 
     // Bereinige eventuelle Thumbnail-Parameter wie width=96
     const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
@@ -521,12 +563,18 @@
 
     try {
       const res = await fetch(cleanUrl, {
+        method: postBody === null ? 'GET' : 'POST',
+        body: postBody,
         credentials: 'include',
         redirect: 'follow',
         cache: 'no-store',
-        // Bewusst nur "Accept": Cache-Control/Pragma sind keine CORS-sicheren
-        // Header und würden jede Anfrage präflight-pflichtig machen.
-        headers: { 'Accept': 'application/pdf, application/octet-stream, text/html, */*' }
+        // Bewusst nur "Accept" und der Formular-Content-Type: Cache-Control und
+        // Pragma sind keine CORS-sicheren Header und würden jede Anfrage
+        // präflight-pflichtig machen.
+        headers: {
+          'Accept': 'application/pdf, application/octet-stream, text/html, */*',
+          ...(postBody === null ? {} : { 'Content-Type': 'application/x-www-form-urlencoded' })
+        }
       });
       if (!res.ok) return null;
 
@@ -540,20 +588,30 @@
         const html = new TextDecoder().decode(buf);
         const snippet = html.replace(/\s+/g, ' ').slice(0, 300);
 
-        // Solange das Portal das PDF erst erzeugt, wird dieselbe Adresse erneut
-        // abgefragt. Nur ein echtes Meta-Refresh darf das Ziel verschieben -
-        // ein beliebiger Link aus der Warteseite führt sonst ins Leere.
-        if (WAITING_RE.test(html) && _waitCount < MAX_WAIT_ROUNDS) {
-          const nextUrl = extractRefreshUrl(html, cleanUrl) || cleanUrl;
-          logDebug('WAIT', `PDF wird noch erzeugt (${_waitCount + 1}/${MAX_WAIT_ROUNDS}). Warte 3s...`);
+        // Warteseite mit eigenem Formular: so weitermachen, wie es die Seite
+        // selbst tut - das Formular abschicken. Das ist der einzige Weg, der
+        // bei BCA zum PDF führt.
+        const form = findFormPost(html, res.url || cleanUrl);
+        if (form && waitCount < MAX_WAIT_ROUNDS) {
+          logDebug('FORM_POST', `Warteseite: Formular abschicken (${waitCount + 1}/${MAX_WAIT_ROUNDS}) -> ${form.action.split('?')[0]}`);
           await sleep(WAIT_INTERVAL_MS);
-          return fetchPdfInPage(nextUrl, _depth, _waitCount + 1);
+          return fetchPdfInPage(form.action, { depth, waitCount: waitCount + 1, postBody: form.body });
+        }
+
+        // Ohne Formular: dieselbe Adresse erneut abfragen. Verschieben darf das
+        // Ziel nur ein echtes Meta-Refresh - ein beliebiger Link aus der
+        // Warteseite führt sonst ins Leere.
+        if (WAITING_RE.test(html) && waitCount < MAX_WAIT_ROUNDS) {
+          const nextUrl = extractRefreshUrl(html, cleanUrl) || cleanUrl;
+          logDebug('WAIT', `PDF wird noch erzeugt (${waitCount + 1}/${MAX_WAIT_ROUNDS}). Warte 3s...`);
+          await sleep(WAIT_INTERVAL_MS);
+          return fetchPdfInPage(nextUrl, { depth, waitCount: waitCount + 1 });
         }
 
         const nested = findPdfInHtml(html, res.url || cleanUrl);
         if (nested && nested !== cleanUrl && nested !== url && nested !== res.url) {
           logDebug('NESTED', `Gefundener PDF-Viewer-Link im HTML: ${nested}`);
-          return fetchPdfInPage(nested, _depth + 1, _waitCount);
+          return fetchPdfInPage(nested, { depth: depth + 1, waitCount });
         }
 
         logDebug('HTML_PEEK', `HTML von ${cleanUrl.split('?')[0]} (${buf.byteLength} B): ${snippet}`);
