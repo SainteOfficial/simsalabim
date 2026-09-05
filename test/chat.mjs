@@ -84,6 +84,7 @@ const CORS = {
 
 const chatRequests = [];
 let answerNo = 0;
+let chatDelayMs = 0;
 const apiServer = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS).end();
@@ -101,9 +102,12 @@ const apiServer = http.createServer((req, res) => {
     }
     chatRequests.push(parsed);
     answerNo++;
-    res.end(JSON.stringify({
+    const send = () => res.end(JSON.stringify({
       choices: [{ message: { content: `Antwort ${answerNo} aus dem Dokument (Seite 1).` } }]
     }));
+    // Beim ersten Mal langsam antworten: nur so ist der Zwischenzustand
+    // ueberhaupt sichtbar, waehrend die KI noch schreibt.
+    chatDelayMs ? setTimeout(send, chatDelayMs) : send();
   });
 });
 
@@ -207,30 +211,74 @@ check('Die Frage steht am Ende', first.messages?.at(-1)?.content, 'Wie tief ist 
 check('Antwort steht im Verlauf',
   await q(`[...r.querySelectorAll('#vms-react-root p')].some(p => p.textContent.includes('Antwort 1 aus dem Dokument'))`), true);
 
-/* 3 - der Verlauf wächst, bleibt aber gedeckelt */
+/* 3 - waehrend die KI schreibt, laeuft eine Anzeige */
+{
+  chatDelayMs = 2500;
+  const before = chatRequests.length;
+  await page.evaluate(`${ROOT}.querySelector('#vms-react-root button[type="submit"]').click()`);
+  await page.waitForTimeout(350);
+  await page.evaluate(([sel, text]) => {
+    const root = document.getElementById('vms-host').shadowRoot.querySelector('.vms-root');
+    const el = root.querySelector(sel);
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(el, text);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, ['.vms-chat-input', 'Wie ist der Gesamtzustand?']);
+  await page.waitForTimeout(120);
+  await page.evaluate(`(() => {
+    const el = ${ROOT}.querySelector('.vms-chat-input');
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  })()`);
+
+  await page.waitForFunction(`${ROOT}?.querySelector('.vms-chat-typing')`, null, { timeout: 5000 })
+    .catch(() => {});
+  check('Schreibanzeige erscheint waehrend der Antwort',
+    await q(`Boolean(r.querySelector('.vms-chat-typing'))`), true);
+  check('Sie besteht aus drei Punkten',
+    await q(`r.querySelectorAll('.vms-chat-typing .vms-chat-dot').length`), 3);
+  check('Die Punkte sind animiert', await q(`(() => {
+    const d = r.querySelector('.vms-chat-dot');
+    return getComputedStyle(d).animationName !== 'none';
+  })()`), true);
+  check('Die Punkte laufen versetzt an', await q(`(() => {
+    const ds = [...r.querySelectorAll('.vms-chat-dot')];
+    return new Set(ds.map(d => getComputedStyle(d).animationDelay)).size === 3;
+  })()`), true);
+
+  // Nach der Antwort verschwindet sie wieder
+  for (let i = 0; i < 60 && chatRequests.length === before; i++) await page.waitForTimeout(200);
+  await page.waitForFunction(`!${ROOT}?.querySelector('.vms-chat-typing')`, null, { timeout: 10000 })
+    .catch(() => {});
+  check('Nach der Antwort ist sie wieder weg',
+    await q(`Boolean(r.querySelector('.vms-chat-typing'))`), false);
+  chatDelayMs = 0;
+  await page.waitForTimeout(300);
+}
+
+/* 4 - der Verlauf wächst, bleibt aber gedeckelt */
 await ask('Und was steht zu den Bremsen?');
 await ask('Gibt es Rost?');
 await ask('Steht etwas zum Unfallschaden?');
 await ask('Und zur Scheibe?');
 
-check('Fünf Chat-Anfragen insgesamt', chatRequests.length, 5);
+check('Sechs Chat-Anfragen insgesamt', chatRequests.length, 6);
 
 /** Nachrichten zwischen Dokumentblock und aktueller Frage = mitgeschickter Verlauf. */
 const historyOf = (req) => (req.messages || []).slice(3, -1);
 check('Erste Frage ohne Verlauf', historyOf(chatRequests[0]).length, 0);
 check('Zweite Frage mit einem Paar', historyOf(chatRequests[1]).length, 2);
-check('Verlauf bei drei Paaren gedeckelt', historyOf(chatRequests[4]).length, 6);
+check('Verlauf bei drei Paaren gedeckelt', historyOf(chatRequests[5]).length, 6);
 check('Verlauf wechselt Frage/Antwort ab',
-  historyOf(chatRequests[4]).map((m) => m.role),
+  historyOf(chatRequests[5]).map((m) => m.role),
   ['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
 check('Der Verlauf endet bei der vorletzten Frage',
-  historyOf(chatRequests[4]).at(-2).content, 'Steht etwas zum Unfallschaden?');
+  historyOf(chatRequests[5]).at(-2).content, 'Steht etwas zum Unfallschaden?');
 check('Die älteste Frage ist rausgefallen',
-  historyOf(chatRequests[4]).some((m) => m.content.includes('Profil hinten rechts')), false);
+  historyOf(chatRequests[5]).some((m) => m.content.includes('Profil hinten rechts')), false);
 
-/* 4 - das Dokument geht genau einmal pro Anfrage mit, nicht je Runde */
+/* 5 - das Dokument geht genau einmal pro Anfrage mit, nicht je Runde */
 check('Dokumenttext nur einmal pro Anfrage',
-  (chatRequests[4].messages || []).filter((m) => String(m.content).includes('--- Seite 1 ---')).length, 1);
+  (chatRequests[5].messages || []).filter((m) => String(m.content).includes('--- Seite 1 ---')).length, 1);
 
 check('Keine Fehler im Service Worker', swErrors, []);
 check('Keine Fehler in der Seite', pageErrors, []);

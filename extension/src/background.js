@@ -501,6 +501,29 @@ async function diagnoseApi() {
   }
 }
 
+/*
+ * Wörter, an denen ein Zustandsbericht seine Befunde festmacht. Sie dienen nur
+ * als Gegenprobe: bleibt die Mängelliste leer, obwohl der Text davon voll ist,
+ * stimmt etwas nicht - und ein stilles "keine Mängel" wäre beim Auktionskauf
+ * die teuerste Art von Fehler.
+ */
+const DAMAGE_HINTS = [
+  'vorschaden', 'vorschäden', 'vorschadeninfo', 'wertmindernd', 'wertminderung',
+  'minderwert', 'gebrauchsspuren', 'delle', 'kratzer', 'steinschlag', 'lackschaden',
+  'instandsetzen', 'smart repair', 'erneuern', 'nachlackieren', 'rost', 'riss',
+  'verschlissen', 'beschädigt', 'schramme', 'beule', 'dellen'
+];
+
+/** Wie viele verschiedene Begriffe im Text vorkommen. */
+function damageHintCount(text) {
+  const haystack = String(text || '').toLowerCase();
+  return DAMAGE_HINTS.filter((w) => haystack.includes(w)).length;
+}
+
+// Ein einzelner Treffer sagt wenig - "keine Vorschäden" enthält das Wort auch.
+// Erst mehrere verschiedene Begriffe sind ein belastbares Signal.
+const DAMAGE_HINT_THRESHOLD = 3;
+
 /* ---------------------------------------------------------- Normalisierung */
 
 const SEVERITY_ORDER = { kritisch: 0, mittel: 1, gering: 2, hinweis: 3 };
@@ -825,15 +848,16 @@ async function analyze({ tabId, pageContext, docs, force }) {
       signal: controller.signal
     };
     const usages = [];
-    let result;
     let chunkCount = 1;
 
-    if (mode === 'chunked') {
+    /** Langer Text: in Teilen auswerten und danach zusammenführen. */
+    async function runChunked() {
       const units = [];
+      // Beim zweiten Anlauf bewusst kleinere Teile: die Aufgabe pro Aufruf soll
+      // kleiner werden als beim ersten, sonst bringt der Versuch nichts.
+      const budget = mode === 'chunked' ? settings.maxChars : Math.min(settings.maxChars, 12000);
       for (const doc of withText) {
-        splitIntoChunks(doc.text, settings.maxChars).forEach((c) =>
-          units.push({ label: doc.label, ...c })
-        );
+        splitIntoChunks(doc.text, budget).forEach((c) => units.push({ label: doc.label, ...c }));
       }
       chunkCount = units.length;
       progress(tabId, 'ai', { model, mode, chunks: chunkCount, pages: coverage.pages });
@@ -901,7 +925,7 @@ async function analyze({ tabId, pageContext, docs, force }) {
       const drop = new Set((synthesis.duplicate_indices || []).filter(Number.isInteger));
       const finalDefects = defects.filter((_, i) => !drop.has(i));
 
-      result = buildResult({
+      return buildResult({
         raw: {
           report_found: partials.some((p) => p?.report_found),
           overall_condition: synthesis.overall_condition,
@@ -915,7 +939,10 @@ async function analyze({ tabId, pageContext, docs, force }) {
         vehicle,
         confidence
       });
-    } else {
+    }
+
+    /** Kurzer Text: ein Aufruf, Mängel und Empfehlung zusammen. */
+    async function runSingle() {
       progress(tabId, 'ai', { model, mode, pages: coverage.pages, images: images.length });
 
       const documents = withText.map((d) => ({
@@ -952,7 +979,7 @@ async function analyze({ tabId, pageContext, docs, force }) {
       usages.push(res.usage);
 
       const raw = parseJsonLoose(res.content);
-      result = buildResult({
+      return buildResult({
         raw,
         defects: mergeDefects([raw?.defects || []]),
         tires: dedupeTires(raw?.tires || []),
@@ -962,9 +989,37 @@ async function analyze({ tabId, pageContext, docs, force }) {
       });
     }
 
+    let usedMode = mode;
+    let result = mode === 'chunked' ? await runChunked() : await runSingle();
+
+    /*
+     * Gegenprobe: leere Mängelliste, aber der Text ist voller Befundwörter.
+     * Dann war der eine große Aufruf zu viel auf einmal - in Teilen findet
+     * dasselbe Modell die Tabellenzeilen deutlich zuverlässiger. Der zweite
+     * Versuch kostet einen Aufruf, aber nur in genau diesem Fall.
+     */
+    const hints = damageHintCount(withText.map((d) => d.text).join('\n'));
+    let suspectEmpty = false;
+    if (!result.defects.length && hints >= DAMAGE_HINT_THRESHOLD) {
+      if (mode !== 'chunked') {
+        progress(tabId, 'recheck', { hints });
+        const retry = await runChunked();
+        if (retry.defects.length) {
+          result = retry;
+          usedMode = 'chunked';
+        } else {
+          suspectEmpty = true;
+        }
+      } else {
+        suspectEmpty = true;
+      }
+    }
+    result.suspect_empty = suspectEmpty;
+    result.damage_hints = hints;
+
     const meta = {
       model,
-      mode,
+      mode: usedMode,
       chunks: chunkCount,
       usage: mergeUsage(usages),
       calls: usages.length,

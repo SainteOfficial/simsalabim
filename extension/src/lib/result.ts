@@ -79,6 +79,10 @@ export type AnalysisResult = {
   verdict: Verdict;
   counts: Record<Severity, number>;
   meta?: Meta;
+  /** Leere Mängelliste, obwohl der Text voller Befundwörter steht. */
+  suspect_empty?: boolean;
+  /** Wie viele verschiedene Befundwörter im Dokument vorkommen. */
+  damage_hints?: number;
 };
 
 export const SEVERITY_ORDER: Record<Severity, number> = {

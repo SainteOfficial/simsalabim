@@ -467,6 +467,9 @@ await settings({ cacheEnabled: true });
 page = await ctx.newPage();
 await page.goto(site('bca.html'));
 await page.waitForFunction(ROOT, null, { timeout: 20000 });
+// Das Panel rendert seinen Inhalt asynchron - auf den Block warten, nicht nur
+// auf die Hülle. Sonst haengt der Test daran, wie schnell die Analyse laeuft.
+await page.waitForFunction(`${ROOT}?.querySelector('.vms-onpage li')`, null, { timeout: 20000 });
 
 check('Schäden von der Seite sofort sichtbar (vor der KI)',
   await evalRoot(page, `[...r.querySelectorAll('.vms-onpage li')].map(l => l.textContent.trim())`),

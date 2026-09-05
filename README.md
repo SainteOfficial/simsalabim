@@ -67,6 +67,29 @@ Was pro Frage an die KI geht, ist bewusst gedeckelt:
 Ältere Runden fallen heraus. Der Tokenverbrauch pro Frage bleibt damit vorhersehbar,
 statt mit jeder Frage weiterzuwachsen.
 
+Während die Antwort entsteht, laufen drei Punkte im Verlauf – sonst steht nach dem Absenden
+nichts da und es sieht aus, als sei die Frage verloren gegangen.
+
+## Wenn die Auswertung leer bleibt
+
+Ein Zustandsbericht in einem einzigen Aufruf mit vollem JSON-Schema auszuwerten ist für
+kleinere Modelle die schwerere Aufgabe als eine freie Frage im Chat. Beobachtet: die Analyse
+meldete „Keine Mängel dokumentiert“, während dieselbe Datei im Chat mehrere Vorschäden
+und wertmindernde Faktoren hergab.
+
+Dagegen stehen drei Dinge:
+
+1. Der Prompt benennt die Abschnitte, in denen Zustandsberichte ihre Befunde führen –
+   *Vorschäden*, *wertmindernde Faktoren*, *Gebrauchsspuren*, fällige HU, und jede Zeile mit
+   einer Maßnahme wie „instandsetzen“ oder „erneuern“. Ohne diese Liste ordnet ein Modell
+   Tabellenzeilen gern der Ausstattung zu.
+2. Bleibt die Liste trotzdem leer, obwohl der Dokumenttext mindestens drei verschiedene
+   Befundwörter enthält, wertet die Extension **ein zweites Mal in kleineren Teilen** aus.
+   Das kostet einen zusätzlichen Aufruf, aber nur in genau diesem Fall.
+3. Bleibt es auch danach leer, zeigt das Panel **kein** beruhigendes „keine Mängel“, sondern
+   benennt den Widerspruch und bietet eine neue Auswertung an. Ein falsches Entwarnen ist
+   beim Auktionskauf der teuerste Fehler.
+
 ## Kaufempfehlung
 
 Bewusst **nicht** auf dem Startbildschirm, sondern im Tab **Meinung** – wer nur die Schäden
@@ -283,7 +306,8 @@ extension/
   vendor/pdfjs/            pdf.js 3.11.174 (Apache-2.0), lokal eingebunden
 test/
   e2e.mjs                  End-to-End-Test mit echtem Chromium
-  chat.mjs                 Chat: Kontext, Verlaufsdeckel, Freitext-Antwort
+  chat.mjs                 Chat: Kontext, Verlaufsdeckel, Schreibanzeige
+  empty-recheck.mjs        Gegenprobe bei leerer Mängelliste
   dist-current.mjs         wacht darüber, dass dist/ zum Quellcode passt
   bca-viewpdf.mjs          Dokumentenabruf über zwei Origins (BCA-Topologie)
   tabs-sparse.mjs          Berechnet/Meinung bei dünner Datenlage
@@ -366,6 +390,7 @@ node test/e2e.mjs
 node test/bca-viewpdf.mjs
 node test/tabs-sparse.mjs
 node test/chat.mjs
+node test/empty-recheck.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension

@@ -886,6 +886,13 @@
         render();
       }
     }
+    // Die erste Auswertung kam leer zurück, obwohl der Text Befunde nennt -
+    // jetzt läuft der gründlichere zweite Anlauf in kleineren Teilen.
+    if (msg.step === 'recheck') {
+      completeStep('ai', 'Erste Auswertung blieb leer');
+      state.progressPct = 60;
+      pushStep('ai', 'Zweiter Anlauf: Dokument in Teilen');
+    }
     if (msg.step === 'synthesis') {
       completeStep('ai', 'Alle Teile ausgewertet');
       state.progressPct = 92;

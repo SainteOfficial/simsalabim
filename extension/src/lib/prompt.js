@@ -8,7 +8,7 @@
  * PROMPT_VERSION geht in den Cache-Key ein: Prompt ändern => Cache wird ungültig.
  */
 
-export const PROMPT_VERSION = 6;
+export const PROMPT_VERSION = 7;
 
 /* ------------------------------------------------------------- Bausteine */
 
@@ -276,10 +276,32 @@ const BASE_RULES = [
   '3. Jeder Mangel bekommt ein wörtliches Zitat als Beleg ("quote").',
   '4. Doppelte Einträge zusammenfassen (gleicher Schaden auf mehreren Seiten = ein Eintrag).',
   '5. Reine Ausstattungslisten, Werbetexte, AGB und Händlerdaten sind KEINE Mängel.',
-  '6. Positive Aussagen ("keine Beanstandung", "i.O.") sind KEINE Mängel.',
+  '6. Positive Aussagen ("keine Beanstandung", "i.O.", "ohne Befund") sind KEINE Mängel.',
+  '   ABER: "kein Abzug" bewertet nur den Preis, nicht den Zustand - ein so markierter',
+  '   Befund bleibt ein Eintrag (severity "hinweis").',
   '7. Reifen mit Profiltiefe unter 3 mm als Mangel (severity "mittel"), unter 1,6 mm als "kritisch".',
   '8. Gehe das Dokument vollständig durch, Seite für Seite, auch Anhänge, Tabellen und Fußnoten.',
   '9. Sortiere defects nach Schwere: kritisch, mittel, gering, hinweis.'
+];
+
+/*
+ * Zustandsberichte listen ihre Befunde fast immer in Tabellen und benennen sie
+ * je nach Haus anders. Ohne diese Aufzählung ordnet ein Modell Zeilen wie
+ * "Seitenwand rechts: Delle(n) - sanft instandsetzen" gern der Ausstattung zu
+ * und liefert eine leere Mängelliste zurück.
+ */
+const SECTION_RULES = [
+  'Wo Mängel stehen können - alle diese Abschnitte auswerten:',
+  '- "Vorschäden", "Vorschadeninfo", "bekannte und reparierte Vorschäden": jeder Eintrag ist',
+  '  ein Mangel, auch wenn er als repariert gilt. Betrag und Datum mitnehmen.',
+  '- "Wertmindernde Faktoren", "Wertminderung", "Minderwert".',
+  '- "Gebrauchsspuren", "Gebrauchsspuren ohne Abzug": severity "hinweis".',
+  '- Hauptuntersuchung/HU/TÜV/AU: "fällig", "überfällig", "abgelaufen" ist ein Mangel',
+  '  mit affects_roadworthiness true.',
+  '- Jede Zeile mit einer Handlungsanweisung: "instandsetzen", "erneuern", "ersetzen",',
+  '  "lackieren", "Smart Repair", "nachbessern", "fehlt", "prüfen".',
+  '- Tabellenzeilen der Form "Bauteil: Befund - Maßnahme" sind Mängel, kein Zubehör.',
+  'Liefere niemals eine leere Mängelliste, solange einer dieser Abschnitte Einträge hat.'
 ];
 
 const VERDICT_RULES = [
@@ -305,6 +327,8 @@ export function systemPrompt(lang = 'de', { withVerdict = true } = {}) {
       (withVerdict ? ' und gib anschließend eine Kaufempfehlung.' : '.'),
     '',
     ...BASE_RULES,
+    '',
+    ...SECTION_RULES,
     ...(withVerdict ? ['', ...VERDICT_RULES] : []),
     '',
     `Sprache aller Freitexte: ${LANG_LABEL[lang] || 'Deutsch'}.`,

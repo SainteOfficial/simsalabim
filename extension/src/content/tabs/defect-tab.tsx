@@ -69,17 +69,19 @@ export function DefectTab({
     return (
       <>
         <PageDamages damages={pageDamages} showAll={showAllPageDamages} />
-        <div className="vms-empty">
-          <CheckBig />
-          <div>
-            <strong>Keine Mängel dokumentiert</strong>
-            <p>
-              {r.report_found
-                ? 'Im Dokument sind keine Schäden vermerkt.'
-                : 'Das Dokument enthält keine Zustandsangaben.'}
-            </p>
+        {r.suspect_empty ? <EmptyButSuspect hints={r.damage_hints || 0} /> : (
+          <div className="vms-empty">
+            <CheckBig />
+            <div>
+              <strong>Keine Mängel dokumentiert</strong>
+              <p>
+                {r.report_found
+                  ? 'Im Dokument sind keine Schäden vermerkt.'
+                  : 'Das Dokument enthält keine Zustandsangaben.'}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
         <Coverage result={r} />
       </>
     );
@@ -186,6 +188,41 @@ export function DefectTab({
       ) : null}
       <Coverage result={r} />
     </>
+  );
+}
+
+/**
+ * Leere Liste, aber der Dokumenttext ist voller Befundwörter. Ein beruhigendes
+ * "keine Mängel" wäre hier die teuerste Art von Fehler - also sagt das Panel
+ * offen, dass die Auswertung nicht zum Dokument passt.
+ */
+function EmptyButSuspect({ hints }: { hints: number }) {
+  return (
+    <div className="vms-app px-1 py-2">
+      <div className="rounded-xl border border-panel-warn/30 bg-panel-warn/[0.08] px-3 py-3">
+        <div className="mb-1 flex items-center gap-2 text-panel-warn">
+          <AlertIcon />
+          <strong className="text-[12.5px]">Auswertung passt nicht zum Dokument</strong>
+        </div>
+        <p className="text-[12px] leading-relaxed">
+          Die Auswertung hat keinen Mangel erfasst, im Dokument stehen aber {hints} verschiedene
+          Begriffe, die auf Befunde hindeuten – etwa Vorschäden, Dellen oder Kratzer.
+          Verlass dich hier <strong>nicht</strong> auf „keine Mängel“.
+        </p>
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          <button
+            className="rounded-lg bg-panel-accent px-2.5 py-1.5 text-[12px] font-semibold text-panel-on-accent transition hover:brightness-110"
+            data-act="rerun"
+            type="button"
+          >
+            Neu auswerten
+          </button>
+          <span className="self-center text-[11.5px] text-panel-dim">
+            oder unten im Chat gezielt nachfragen
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 
