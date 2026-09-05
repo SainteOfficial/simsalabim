@@ -20,6 +20,7 @@ export type PanelState = {
   context: Record<string, string>;
   pageDamages: string[];
   showAllPageDamages: boolean;
+  chatHidden: boolean;
   docs: { url?: string; label?: string; kind?: string }[];
   result: AnalysisResult | null;
   steps: Step[];

@@ -16,6 +16,10 @@ export const DEFAULTS = {
   panelPosition: null,
   panelCollapsed: false,
   panelTheme: 'auto',
+  chatHidden: false,
+  // Wie viel Base64 höchstens direkt an den Hintergrunddienst geht. Darüber
+  // wandern die Bytes über den Speicher, weil eine Nachricht bei 64 MiB endet.
+  maxInlineBase64: 24 * 1024 * 1024,
   panelSize: null,
   markLinks: true,
   /**

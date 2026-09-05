@@ -280,6 +280,23 @@ check('Die älteste Frage ist rausgefallen',
 check('Dokumenttext nur einmal pro Anfrage',
   (chatRequests[5].messages || []).filter((m) => String(m.content).includes('--- Seite 1 ---')).length, 1);
 
+/* 6 - der Chat laesst sich aus- und wieder einblenden */
+{
+  await page.evaluate(`${ROOT}.querySelector('[data-act="toggle-chat"]').click()`);
+  await page.waitForTimeout(400);
+  check('Ausgeblendet ist der Chat weg', await q(`Boolean(r.querySelector('.vms-chat-input'))`), false);
+  check('Der Schalter bleibt erreichbar',
+    await q(`Boolean(r.querySelector('[data-act="toggle-chat"]'))`), true);
+  check('Der Schalter meldet den Zustand',
+    await q(`r.querySelector('[data-act="toggle-chat"]').getAttribute('aria-pressed')`), 'false');
+
+  await page.evaluate(`${ROOT}.querySelector('[data-act="toggle-chat"]').click()`);
+  await page.waitForTimeout(400);
+  check('Wieder eingeblendet ist er zurück', await q(`Boolean(r.querySelector('.vms-chat-input'))`), true);
+  check('Der Verlauf hat das überlebt',
+    await q(`[...r.querySelectorAll('#vms-react-root p')].some(p => p.textContent.includes('Antwort 1'))`), true);
+}
+
 check('Keine Fehler im Service Worker', swErrors, []);
 check('Keine Fehler in der Seite', pageErrors, []);
 

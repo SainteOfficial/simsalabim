@@ -725,6 +725,19 @@ async function analyze({ tabId, pageContext, docs, force }) {
 
       let base64 = doc.base64 || null;
       let bytes = doc.bytes || 0;
+
+      // Zu groß für eine Nachricht: das Content-Script hat die Bytes im
+      // Speicher abgelegt. Sie hier abzuholen ist deutlich billiger, als das
+      // PDF ein zweites Mal beim Portal anzufordern - dort wird es teils
+      // serverseitig neu erzeugt und kostet knapp eine Minute.
+      if (!base64 && doc.handoffKey) {
+        try {
+          const store = await chrome.storage.local.get(doc.handoffKey);
+          base64 = store[doc.handoffKey] || null;
+        } catch { /* dann eben herunterladen */ }
+        chrome.storage.local.remove(doc.handoffKey).catch(() => {});
+      }
+
       if (!base64) {
         try {
           const dl = await fetchPdfInBackground(doc.url, controller.signal, { deadline: downloadDeadline });
@@ -1267,6 +1280,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return false;
   }
 });
+
+/** Übergaben, die ein Absturz mitten in der Analyse hinterlassen hat. */
+async function sweepHandoffs() {
+  try {
+    const all = await chrome.storage.local.get(null);
+    const stale = Object.keys(all).filter((k) => k.startsWith('handoff:'));
+    if (stale.length) await chrome.storage.local.remove(stale);
+  } catch { /* ignore */ }
+}
+sweepHandoffs();
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   const current = await chrome.storage.local.get(Object.keys(DEFAULTS));

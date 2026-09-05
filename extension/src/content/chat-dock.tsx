@@ -81,7 +81,8 @@ export function ChatDock() {
     }
   }
 
-  if (!panel || panel.status !== 'done') return null;
+  // Ausgeblendet: der Schalter dafür sitzt im Fuß des Panels.
+  if (!panel || panel.status !== 'done' || panel.chatHidden) return null;
 
   return (
     <div className="vms-app border-t border-panel-line px-1.5 pb-1 pt-1">

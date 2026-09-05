@@ -70,6 +70,9 @@ statt mit jeder Frage weiterzuwachsen.
 Während die Antwort entsteht, laufen drei Punkte im Verlauf – sonst steht nach dem Absenden
 nichts da und es sieht aus, als sei die Frage verloren gegangen.
 
+Wer den Chat nicht braucht, blendet ihn über das Sprechblasen-Symbol im Fuß des Panels aus;
+derselbe Knopf holt ihn zurück. Der Verlauf bleibt dabei stehen.
+
 ## Wenn die Auswertung leer bleibt
 
 Ein Zustandsbericht in einem einzigen Aufruf mit vollem JSON-Schema auszuwerten ist für
@@ -89,6 +92,24 @@ Dagegen stehen drei Dinge:
 3. Bleibt es auch danach leer, zeigt das Panel **kein** beruhigendes „keine Mängel“, sondern
    benennt den Widerspruch und bietet eine neue Auswertung an. Ein falsches Entwarnen ist
    beim Auktionskauf der teuerste Fehler.
+
+## Tempo
+
+Drei Stellen, an denen der Ablauf früher Zeit verschenkt hat:
+
+- **Dokumente laden gleichzeitig.** Vorher wartete jedes auf das vorige. Bei BCA kostet ein
+  einzelnes Fahrzeug-PDF schon fast eine Minute, weil es serverseitig erst erzeugt wird –
+  drei davon nacheinander summieren sich.
+- **Große PDFs wandern über den Speicher.** Eine Nachricht an den Hintergrunddienst endet bei
+  64 MiB. Was nicht hineinpasst, wurde vorher verworfen und ein zweites Mal beim Portal
+  angefordert – die ganze Wartezeit noch einmal. Jetzt legt das Content-Script die Bytes ab,
+  der Hintergrunddienst holt sie und räumt auf.
+- **Die erste Warterunde ist kurz.** Die Portalseite schickt ihr Formular nach einem
+  Sekundenbruchteil ab; drei Sekunden zu warten war reine Verzögerung.
+
+Was sich damit **nicht** beschleunigen lässt: die Zeit, die BCA zum Erzeugen des PDFs
+braucht, und die Antwortzeit des Modells. Wer es dort eiliger hat, stellt in den Optionen ein
+schnelleres Modell ein.
 
 ## Kaufempfehlung
 
@@ -308,6 +329,7 @@ test/
   e2e.mjs                  End-to-End-Test mit echtem Chromium
   chat.mjs                 Chat: Kontext, Verlaufsdeckel, Schreibanzeige
   empty-recheck.mjs        Gegenprobe bei leerer Mängelliste
+  handoff.mjs              Übergabe großer PDFs, paralleles Laden
   dist-current.mjs         wacht darüber, dass dist/ zum Quellcode passt
   bca-viewpdf.mjs          Dokumentenabruf über zwei Origins (BCA-Topologie)
   tabs-sparse.mjs          Berechnet/Meinung bei dünner Datenlage
@@ -391,6 +413,7 @@ node test/bca-viewpdf.mjs
 node test/tabs-sparse.mjs
 node test/chat.mjs
 node test/empty-recheck.mjs
+node test/handoff.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension

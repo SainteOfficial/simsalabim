@@ -14,6 +14,7 @@
    * reichlich Luft und decken jedes übliche Fahrzeugdokument ab.
    */
   const MAX_INLINE_BASE64 = 24 * 1024 * 1024;
+  const HANDOFF_PREFIX = 'handoff:';
   const VIN_RE = /\b[A-Z0-9]{17}\b/;
 
   /**
@@ -73,6 +74,7 @@
     scrolled: false,
     closed: false,
     theme: 'auto',
+    chatHidden: false,
     view: 'main',
     debugLogs: [],
     apiDiagnosis: null,
@@ -537,6 +539,7 @@
 
   const MAX_WAIT_ROUNDS = 20;
   const WAIT_INTERVAL_MS = 3000;
+  const FIRST_WAIT_MS = 600;
 
   /**
    * Download im Seitenkontext. Nur sinnvoll, solange das Dokument auf demselben
@@ -638,7 +641,10 @@
         const form = findFormPost(html, res.url || cleanUrl);
         if (form && waitCount < MAX_WAIT_ROUNDS) {
           logDebug('FORM_POST', `Warteseite: Formular abschicken (${waitCount + 1}/${MAX_WAIT_ROUNDS}) -> ${form.action.split('?')[0]}`);
-          await sleep(WAIT_INTERVAL_MS);
+          // Die Seite selbst schickt ihr Formular nach einem Sekundenbruchteil
+          // ab - beim ersten Mal genauso schnell sein, statt drei Sekunden zu
+          // verschenken. Erst danach in Ruhe weiterfragen.
+          await sleep(waitCount === 0 ? FIRST_WAIT_MS : WAIT_INTERVAL_MS);
           return fetchPdfInPage(form.action, { depth, waitCount: waitCount + 1, postBody: form.body });
         }
 
@@ -771,6 +777,7 @@
       }, 10000);
     } catch { /* ignore */ }
 
+    let handoffKeys = [];
     state.status = 'busy';
     state.error = null;
     state.result = null;
@@ -787,34 +794,50 @@
     render();
 
     try {
-      const payloadDocs = [];
-      let inlineLeft = MAX_INLINE_BASE64;
-      for (const doc of state.docs) {
-        pushStep('download', `Lade ${doc.label}`);
-        logDebug('DOWNLOAD', `Versuche Download im Tab: ${doc.url}`);
-        const fetched = await fetchPdfInPage(doc.url);
+      // Die Dokumente werden gleichzeitig geholt. Nacheinander wartete jedes
+      // auf das vorige - bei BCA erzeugt schon ein einzelnes PDF fast eine
+      // Minute Wartezeit, die sich sonst aufaddiert.
+      pushStep(
+        'download',
+        state.docs.length === 1 ? 'Lade Dokument' : `Lade ${state.docs.length} Dokumente`
+      );
+      let inlineLeft = Number.isFinite(state.settings?.maxInlineBase64)
+        ? state.settings.maxInlineBase64
+        : MAX_INLINE_BASE64;
 
-        // Die Bytes gehen per sendMessage an den Hintergrunddienst, und der
-        // Kanal ist bei 64 MiB zu Ende. Base64 bläht ein PDF um ein Drittel
-        // auf; mehrere große Dokumente reißen die Grenze und die ganze Analyse
-        // bricht ab. Was nicht mehr ins Budget passt, lädt der
-        // Hintergrunddienst selbst - er kommt an dieselbe Adresse.
-        let inline = null;
-        if (fetched) {
-          if (fetched.base64.length <= inlineLeft) {
-            inline = fetched.base64;
-            inlineLeft -= fetched.base64.length;
-            logDebug('DOWNLOAD', `Erfolgreich im Tab geladen (${Math.round(fetched.bytes / 1024)} KB)`);
-          } else {
-            logDebug('DOWNLOAD', `${doc.label} ist zu groß für die Übergabe – der Hintergrunddienst lädt es erneut.`);
+      const payloadDocs = await Promise.all(
+        state.docs.map(async (doc) => {
+          logDebug('DOWNLOAD', `Versuche Download im Tab: ${doc.url}`);
+          const fetched = await fetchPdfInPage(doc.url);
+          if (!fetched) {
+            logDebug('DOWNLOAD', `Tab-Download fehlgeschlagen (CORS/Redirect o.ä.) – Übergabe an Hintergrunddienst.`);
+            return { ...doc, base64: null, handoffKey: null, bytes: 0 };
           }
-        } else {
-          logDebug('DOWNLOAD', `Tab-Download fehlgeschlagen (CORS/Redirect o.ä.) – Übergabe an Hintergrunddienst.`);
-        }
 
-        payloadDocs.push({ ...doc, base64: inline, bytes: inline ? fetched.bytes : 0 });
-        completeStep('download', inline ? `${doc.label} geladen` : `${doc.label} (Download über Hintergrund)`);
-      }
+          logDebug('DOWNLOAD', `Erfolgreich im Tab geladen (${Math.round(fetched.bytes / 1024)} KB)`);
+
+          // Die Bytes gehen an den Hintergrunddienst, und sendMessage ist bei
+          // 64 MiB zu Ende. Was dort nicht mehr hineinpasst, wandert über den
+          // Speicher - ein zweiter Download wäre bei BCA teuer erkauft, weil
+          // das PDF serverseitig neu erzeugt werden müsste.
+          if (fetched.base64.length <= inlineLeft) {
+            inlineLeft -= fetched.base64.length;
+            return { ...doc, base64: fetched.base64, handoffKey: null, bytes: fetched.bytes };
+          }
+
+          const handoffKey = `${HANDOFF_PREFIX}${crypto.randomUUID()}`;
+          try {
+            await chrome.storage.local.set({ [handoffKey]: fetched.base64 });
+            logDebug('HANDOFF', `${doc.label} über den Speicher übergeben (zu groß für eine Nachricht).`);
+            return { ...doc, base64: null, handoffKey, bytes: fetched.bytes };
+          } catch (err) {
+            logDebug('HANDOFF', `Übergabe über den Speicher fehlgeschlagen (${err?.message}) – Hintergrunddienst lädt erneut.`);
+            return { ...doc, base64: null, handoffKey: null, bytes: 0 };
+          }
+        })
+      );
+      completeStep('download', `${payloadDocs.length} geladen`);
+      handoffKeys = payloadDocs.map((d) => d.handoffKey).filter(Boolean);
 
       pushStep('ai', 'KI analysiert Dokumente');
       logDebug('AI', `Sende ANALYZE an Service Worker...`);
@@ -843,6 +866,9 @@
     } finally {
       if (keepAlivePing) clearInterval(keepAlivePing);
       try { keepAlivePort?.disconnect(); } catch { /* ignore */ }
+      // Der Hintergrunddienst löscht die Schlüssel nach dem Lesen selbst;
+      // bricht die Analyse vorher ab, bleibt sonst Ballast im Speicher liegen.
+      if (handoffKeys.length) chrome.storage.local.remove(handoffKeys).catch(() => {});
     }
     render();
   }
@@ -999,6 +1025,10 @@
     } else if (act === 'more-onpage') {
       state.showAllPageDamages = true;
       publishState();
+    } else if (act === 'toggle-chat') {
+      state.chatHidden = !state.chatHidden;
+      chrome.storage.local.set({ chatHidden: state.chatHidden });
+      render();
     } else if (act === 'theme') {
       state.theme = THEME_ORDER[(THEME_ORDER.indexOf(state.theme) + 1) % THEME_ORDER.length];
       chrome.storage.local.set({ panelTheme: state.theme });
@@ -1194,6 +1224,7 @@
       context: state.context,
       pageDamages: state.pageDamages,
       showAllPageDamages: state.showAllPageDamages,
+      chatHidden: state.chatHidden,
       docs: state.docs.map((d) => ({ url: d.url, label: d.label, kind: d.kind })),
       result: state.result,
       steps: state.steps,
@@ -1222,6 +1253,7 @@
       next.tab,
       next.result?.meta?.ts || '',
       next.showAllPageDamages,
+      next.chatHidden,
       state.steps.length,
       state.progressPct,
       state.error?.message || '',
@@ -1404,6 +1436,9 @@
             title="Darstellung: ${THEME_LABEL[state.theme]}">${themeIcon(state.theme)}</button>
           <button class="vms-icon sm" data-act="open-debug" aria-label="Diagnose & Debug"
             title="Diagnose & Systemstatus anzeigen">${debugIcon()}</button>
+          <button class="vms-icon sm ${state.chatHidden ? '' : 'on'}" data-act="toggle-chat"
+            aria-pressed="${!state.chatHidden}" aria-label="Chat ein-/ausblenden"
+            title="${state.chatHidden ? 'Chat einblenden' : 'Chat ausblenden'}">${chatIcon()}</button>
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="copy">Kopieren</button>' : ''}
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="rerun" title="Cache umgehen und neu auswerten">Neu</button>' : ''}
           <button class="vms-ghost sm" data-act="options">Einstellungen</button>
@@ -1525,6 +1560,8 @@
     ({ thumb: thumbIcon, tag: tagIcon, alert: alertIcon, question: questionIcon }[name] || questionIcon)();
   const checkBig = () =>
     '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>';
+  const chatIcon = () =>
+    '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></svg>';
   const debugIcon = () =>
     '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>';
 
@@ -1537,6 +1574,7 @@
     state.portal = portalFor(location.hostname);
     state.collapsed = state.settings.panelCollapsed;
     state.theme = state.settings.panelTheme || 'auto';
+    state.chatHidden = Boolean(state.settings.chatHidden);
     state.size = state.settings.panelSize || null;
 
     // Erst prüfen, dann lesen: ohne Freigabe wird die Seite nicht angefasst.
