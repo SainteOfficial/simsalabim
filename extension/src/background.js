@@ -25,6 +25,7 @@ import * as cache from './lib/cache.js';
 const OFFSCREEN_PATH = 'src/offscreen/offscreen.html';
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const CHUNK_CONCURRENCY = 3;
+const DOWNLOAD_BUDGET_MS = 3 * 60 * 1000;
 
 let offscreenReady = null;
 const running = new Map(); // tabId -> AbortController
@@ -117,10 +118,16 @@ function isProbablePdfUrl(urlStr) {
   );
 }
 
+/**
+ * Ziel eines echten <meta http-equiv="refresh">. Bewusst NUR das Meta-Tag:
+ * ein freies "url=" irgendwo im HTML ist meist ein Query-Parameter in einem
+ * Skript und hat den Poll früher auf eine falsche Adresse geschickt.
+ */
 function extractRefreshUrl(html, baseUrl) {
   if (!html) return null;
-  const rawMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'>]+)["']/i) ||
-                    html.match(/url=([^"'\s>]+)/i);
+  const rawMatch = html.match(
+    /<meta[^>]+http-equiv=["']?refresh["']?[^>]*content=["'][^"']*?url=([^"'>]+)["']/i
+  ) || html.match(/<meta[^>]+content=["'][^"']*?url=([^"'>]+)["'][^>]*http-equiv=["']?refresh["']?/i);
   if (rawMatch && rawMatch[1]) {
     let u = rawMatch[1].trim().replace(/^['"]|['"]$/g, '');
     u = u.replaceAll('&amp;', '&').replaceAll('&#38;', '&');
@@ -137,11 +144,14 @@ function findPdfInHtml(html, baseUrl) {
 
   // 1. Suche nach iframe, embed, object oder frame
   const frameMatches = [
-    ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
     ...html.matchAll(/<embed[^>]+src=["']([^"']+)["']/gi),
     ...html.matchAll(/<object[^>]+data=["']([^"']+)["']/gi),
+    ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
     ...html.matchAll(/<frame[^>]+src=["']([^"']+)["']/gi)
   ];
+  // Nur Rahmen übernehmen, die wirklich nach einem Dokument aussehen. Früher
+  // wurde hier jeder beliebige Rahmen akzeptiert - auf Viewer-Seiten landete
+  // der Download damit im Cookie-Banner statt im PDF.
   for (const m of frameMatches) {
     let src = m[1]?.trim();
     if (!src || src.startsWith('javascript:') || src.startsWith('about:') || NON_PDF_EXT.test(src) || NON_PDF_PATH.test(src)) continue;
@@ -149,7 +159,6 @@ function findPdfInHtml(html, baseUrl) {
     try {
       const resolved = new URL(src, baseUrl).href;
       if (resolved !== baseUrl && isProbablePdfUrl(resolved)) return resolved;
-      if (resolved !== baseUrl && !NON_PDF_EXT.test(resolved) && !NON_PDF_PATH.test(resolved)) return resolved;
     } catch { /* ignore */ }
   }
 
@@ -199,10 +208,64 @@ function findPdfInHtml(html, baseUrl) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const WAITING_RE = /in Vorbereitung|Bitte warten|wird vorbereitet|wird generiert|being prepared|please wait|is generating/i;
 
-/** Fallback-Download im Hintergrund (kein CORS, dafür evtl. ohne Session-Cookies). */
-async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
-  if (_depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
-  if (_waitCount > 35) throw new Error('Das PDF wird von BCA noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
+const MAX_WAIT_ROUNDS = 20;
+const WAIT_INTERVAL_MS = 3000;
+// Nach so vielen erfolglosen Warterunden wird die Seite einmal echt geöffnet.
+const PRIME_AFTER_ROUNDS = 2;
+
+/**
+ * Öffnet die Adresse einmal in einem echten Hintergrund-Tab und schließt ihn
+ * wieder. Nur so läuft das JavaScript der Portalseite, das die Erzeugung des
+ * Dokuments anstößt - genau wie beim Anklicken von Hand. Ein verstecktes
+ * iFrame genügt dafür nicht: fremde Einbettung wird per X-Frame-Options
+ * verboten, der Rahmen lädt zwar, sein Skript läuft aber nie.
+ */
+async function primeInTab(url, signal) {
+  let tabId = null;
+  try {
+    const tab = await chrome.tabs.create({ url, active: false });
+    tabId = tab?.id ?? null;
+  } catch {
+    return false;
+  }
+  if (tabId === null) return false;
+
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { chrome.tabs.onUpdated.removeListener(onUpdated); } catch { /* ignore */ }
+      resolve();
+    };
+    // Nach "complete" noch kurz stehen lassen, damit das Skript der Seite die
+    // Erzeugung wirklich anstoßen kann.
+    const onUpdated = (id, info) => {
+      if (id === tabId && info.status === 'complete') setTimeout(finish, 2500);
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    const timer = setTimeout(finish, 20000);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+
+  try { await chrome.tabs.remove(tabId); } catch { /* Tab evtl. schon geschlossen */ }
+  return true;
+}
+
+/**
+ * Download im Hintergrunddienst. Das ist der verlässliche Weg: die Anfrage
+ * läuft als First-Party-Anfrage (kein Origin-Header, keine CORS-Prüfung) und
+ * trägt die Session-Cookies des Portals mit - anders als ein fetch() aus dem
+ * Content-Script, das bei fremden Origins weder Cookies noch eine Antwort
+ * bekommt.
+ */
+async function fetchPdfInBackground(url, signal, opts = {}) {
+  const { depth = 0, waitCount = 0, primed = false, pollUrl = null, deadline = 0 } = opts;
+  if (depth > 4) throw new Error('Zu viele Weiterleitungen beim PDF-Download.');
+  if (waitCount > MAX_WAIT_ROUNDS || (deadline && Date.now() > deadline)) {
+    throw new Error('Das PDF wird vom Portal noch vorbereitet. Bitte versuche es in wenigen Sekunden erneut.');
+  }
 
   let res;
   // Entferne eventuelle Thumbnail-Parameter wie width=96
@@ -213,11 +276,9 @@ async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
       signal,
       redirect: 'follow',
       cache: 'no-store',
-      headers: {
-        'Accept': 'application/pdf, application/octet-stream, text/html, */*',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
-      }
+      // Bewusst nur "Accept": Cache-Control/Pragma sind keine CORS-sicheren
+      // Header und machen jede Anfrage präflight-pflichtig.
+      headers: { 'Accept': 'application/pdf, application/octet-stream, text/html, */*' }
     });
   } catch (err) {
     if (signal?.aborted) throw new Error('PDF-Download wurde abgebrochen.');
@@ -234,24 +295,63 @@ async function fetchPdfInBackground(url, signal, _depth = 0, _waitCount = 0) {
   if (looksLikePdf(buf)) {
     return { base64: bytesToBase64(buf), bytes: buf.byteLength, finalUrl: res.url };
   }
-  // Kein PDF? Prüfe ob die Antwort HTML ist und ein eingebettetes PDF enthält oder noch generiert wird
+
+  // Kein PDF? Prüfe, ob die Antwort HTML ist und ein eingebettetes PDF enthält
+  // oder das Dokument noch erzeugt wird.
   const type = (res.headers.get('content-type') || '').toLowerCase();
   if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
+    let html = '';
     try {
-      const html = new TextDecoder().decode(buf);
-      const nested = findPdfInHtml(html, res.url || cleanUrl);
-
-      // Falls BCA das PDF noch generiert ("in Vorbereitung / Bitte warten"):
-      if (WAITING_RE.test(html) && _waitCount < 35) {
-        const nextUrl = nested || extractRefreshUrl(html, cleanUrl) || cleanUrl;
-        await sleep(3000);
-        return fetchPdfInBackground(nextUrl, signal, _depth, _waitCount + 1);
-      }
-
-      if (nested && nested !== url && nested !== res.url && nested !== cleanUrl) {
-        return fetchPdfInBackground(nested, signal, _depth + 1, _waitCount);
-      }
+      html = new TextDecoder().decode(buf);
     } catch { /* decode-Fehler ignorieren */ }
+
+    // Warteseite: dieselbe Adresse erneut abfragen. Das Ziel darf nur ein
+    // echtes Meta-Refresh verschieben - ein beliebiger Link aus der Warteseite
+    // (etwa ein Erzeugungs-Endpunkt) führt sonst aus dem Poll heraus und der
+    // Download bricht mit "Antwort ist kein PDF" ab.
+    if (WAITING_RE.test(html) && waitCount < MAX_WAIT_ROUNDS) {
+      let nowPrimed = primed;
+      if (!primed && waitCount >= PRIME_AFTER_ROUNDS) {
+        nowPrimed = (await primeInTab(cleanUrl, signal)) || primed;
+      }
+      const nextUrl = extractRefreshUrl(html, cleanUrl) || cleanUrl;
+      await sleep(WAIT_INTERVAL_MS);
+      return fetchPdfInBackground(nextUrl, signal, {
+        depth,
+        waitCount: waitCount + 1,
+        primed: nowPrimed,
+        pollUrl: pollUrl || cleanUrl,
+        deadline
+      });
+    }
+
+    const nested = findPdfInHtml(html, res.url || cleanUrl);
+    if (nested && nested !== url && nested !== res.url && nested !== cleanUrl) {
+      try {
+        return await fetchPdfInBackground(nested, signal, {
+          depth: depth + 1,
+          waitCount,
+          primed,
+          pollUrl: pollUrl || cleanUrl,
+          deadline
+        });
+      } catch (nestedErr) {
+        if (signal?.aborted) throw nestedErr;
+        // Sackgasse: zurück auf die ursprüngliche Adresse, statt aufzugeben.
+        const back = pollUrl || cleanUrl;
+        if (back !== nested && waitCount < MAX_WAIT_ROUNDS) {
+          await sleep(WAIT_INTERVAL_MS);
+          return fetchPdfInBackground(back, signal, {
+            depth,
+            waitCount: waitCount + 1,
+            primed,
+            pollUrl: back,
+            deadline
+          });
+        }
+        throw nestedErr;
+      }
+    }
   }
   throw new Error(
     `Antwort ist kein PDF (Content-Type: ${res.headers.get('content-type') || 'unbekannt'}). ` +
@@ -509,6 +609,9 @@ async function analyze({ tabId, pageContext, docs, force }) {
     /* ---- 1. PDFs holen und vollständig auslesen ---- */
     const parsed = [];
     let lastDocError = null;
+    // Gesamtbudget für alle Downloads. Ohne das können mehrere Dokumente mit
+    // Warteseite die Analyse minutenlang blockieren.
+    const downloadDeadline = Date.now() + DOWNLOAD_BUDGET_MS;
     for (const doc of docs) {
       if (controller.signal.aborted) throw new Error('Abgebrochen.');
       progress(tabId, 'download', { label: doc.label });
@@ -517,7 +620,7 @@ async function analyze({ tabId, pageContext, docs, force }) {
       let bytes = doc.bytes || 0;
       if (!base64) {
         try {
-          const dl = await fetchPdfInBackground(doc.url, controller.signal);
+          const dl = await fetchPdfInBackground(doc.url, controller.signal, { deadline: downloadDeadline });
           base64 = dl.base64;
           bytes = dl.bytes;
         } catch (dlErr) {

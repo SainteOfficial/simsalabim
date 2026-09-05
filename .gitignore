@@ -1,3 +1,7 @@
 node_modules/
-test/.profile/
+package.json
+package-lock.json
+test/.profile
+test/.profile-*/
 test/fixtures/cert/
+test/fixtures/cert-*/

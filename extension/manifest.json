@@ -8,8 +8,7 @@
   "permissions": [
     "storage",
     "offscreen",
-    "unlimitedStorage",
-    "cookies"
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>"

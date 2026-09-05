@@ -471,10 +471,16 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const WAITING_RE = /in Vorbereitung|Bitte warten|wird vorbereitet|wird generiert|being prepared|please wait|is generating/i;
 
+  /**
+   * Ziel eines echten <meta http-equiv="refresh">. Bewusst NUR das Meta-Tag:
+   * ein freies "url=" irgendwo im HTML ist meist ein Query-Parameter in einem
+   * Skript und hat den Poll früher auf eine falsche Adresse geschickt.
+   */
   function extractRefreshUrl(html, baseUrl) {
     if (!html) return null;
-    const rawMatch = html.match(/<meta[^>]+content=["'][^"']*?url=([^"'>]+)["']/i) ||
-                      html.match(/url=([^"'\s>]+)/i);
+    const rawMatch = html.match(
+      /<meta[^>]+http-equiv=["']?refresh["']?[^>]*content=["'][^"']*?url=([^"'>]+)["']/i
+    ) || html.match(/<meta[^>]+content=["'][^"']*?url=([^"'>]+)["'][^>]*http-equiv=["']?refresh["']?/i);
     if (rawMatch && rawMatch[1]) {
       let u = rawMatch[1].trim().replace(/^['"]|['"]$/g, '');
       u = u.replaceAll('&amp;', '&').replaceAll('&#38;', '&');
@@ -485,27 +491,32 @@
     return null;
   }
 
-  async function fetchPdfInPage(url, _depth = 0, _waitCount = 0, _triggerFrame = null) {
-    if (_depth > 4 || _waitCount > 35) {
-      if (_triggerFrame) { try { _triggerFrame.remove(); } catch {} }
-      return null;
+  const MAX_WAIT_ROUNDS = 20;
+  const WAIT_INTERVAL_MS = 3000;
+
+  /**
+   * Download im Seitenkontext. Nur sinnvoll, solange das Dokument auf demselben
+   * Origin liegt wie die Fahrzeugseite: ein fetch() aus dem Content-Script ist
+   * CORS-pflichtig und bekommt fremde Origins weder mit Cookies noch überhaupt
+   * beantwortet. Für alles andere übernimmt der Hintergrunddienst, der als
+   * First-Party-Anfrage läuft und die Session-Cookies mitschickt.
+   */
+  function sameOriginAsPage(urlStr) {
+    try {
+      return new URL(urlStr, location.href).origin === location.origin;
+    } catch {
+      return false;
     }
+  }
+
+  async function fetchPdfInPage(url, _depth = 0, _waitCount = 0) {
+    if (_depth > 4 || _waitCount > MAX_WAIT_ROUNDS) return null;
+
     // Bereinige eventuelle Thumbnail-Parameter wie width=96
     const cleanUrl = url.replace(/([?&])(?:width|height)=\d+&?/gi, '$1').replace(/[?&]$/, '');
-
-    // Wenn es sich um ein BCA ViewPDF handelt, starte beim ersten Versuch einen unsichtbaren iFrame,
-    // der im Browser-Kontext die echte Dokumenten-Generierung anstößt.
-    let triggerFrame = _triggerFrame;
-    if (!triggerFrame && /ViewPDF\.aspx/i.test(cleanUrl) && typeof document !== 'undefined' && document.body) {
-      try {
-        triggerFrame = document.createElement('iframe');
-        triggerFrame.style.cssText = 'position:fixed;width:1px;height:1px;top:-9999px;left:-9999px;opacity:0;pointer-events:none;';
-        triggerFrame.src = cleanUrl;
-        document.body.appendChild(triggerFrame);
-        logDebug('IFRAME_TRIGGER', `BCA-Generierung via Hintergrund-iFrame gestartet`);
-      } catch (e) {
-        logDebug('IFRAME_ERR', `iFrame-Start fehlgeschlagen: ${e?.message}`);
-      }
+    if (!sameOriginAsPage(cleanUrl)) {
+      logDebug('SKIP_TAB', `${cleanUrl.split('?')[0]} liegt auf einem anderen Origin – direkt an den Hintergrunddienst.`);
+      return null;
     }
 
     try {
@@ -513,51 +524,42 @@
         credentials: 'include',
         redirect: 'follow',
         cache: 'no-store',
-        headers: {
-          'Accept': 'application/pdf, application/octet-stream, text/html, */*',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
-        }
+        // Bewusst nur "Accept": Cache-Control/Pragma sind keine CORS-sicheren
+        // Header und würden jede Anfrage präflight-pflichtig machen.
+        headers: { 'Accept': 'application/pdf, application/octet-stream, text/html, */*' }
       });
-      if (!res.ok) {
-        if (triggerFrame && _waitCount === 0) { try { triggerFrame.remove(); } catch {} }
-        return null;
-      }
+      if (!res.ok) return null;
+
       const type = (res.headers.get('content-type') || '').toLowerCase();
       const buf = await res.arrayBuffer();
       const head = String.fromCharCode.apply(null, new Uint8Array(buf.slice(0, 512)));
 
-      if (head.includes('%PDF-')) {
-        if (triggerFrame) { try { triggerFrame.remove(); } catch {} }
-        return { base64: toBase64(buf), bytes: buf.byteLength };
-      }
+      if (head.includes('%PDF-')) return { base64: toBase64(buf), bytes: buf.byteLength };
 
       if (type.includes('html') || type.includes('text') || buf.byteLength < 800000) {
         const html = new TextDecoder().decode(buf);
         const snippet = html.replace(/\s+/g, ' ').slice(0, 300);
 
-        const nested = findPdfInHtml(html, res.url || cleanUrl);
-
-        // Falls BCA das PDF noch generiert ("in Vorbereitung / Bitte warten"):
-        if (WAITING_RE.test(html) && _waitCount < 35) {
-          const nextUrl = nested || extractRefreshUrl(html, cleanUrl) || cleanUrl;
-          const targetInfo = nextUrl !== cleanUrl ? nextUrl.split('?')[0] : 'selbe URL';
-          logDebug('WAIT', `PDF wird noch generiert (Warteversuch ${_waitCount + 1}/35, Ziel: ${targetInfo}). Warte 3s...`);
-          await sleep(3000);
-          return fetchPdfInPage(nextUrl, _depth, _waitCount + 1, triggerFrame);
+        // Solange das Portal das PDF erst erzeugt, wird dieselbe Adresse erneut
+        // abgefragt. Nur ein echtes Meta-Refresh darf das Ziel verschieben -
+        // ein beliebiger Link aus der Warteseite führt sonst ins Leere.
+        if (WAITING_RE.test(html) && _waitCount < MAX_WAIT_ROUNDS) {
+          const nextUrl = extractRefreshUrl(html, cleanUrl) || cleanUrl;
+          logDebug('WAIT', `PDF wird noch erzeugt (${_waitCount + 1}/${MAX_WAIT_ROUNDS}). Warte 3s...`);
+          await sleep(WAIT_INTERVAL_MS);
+          return fetchPdfInPage(nextUrl, _depth, _waitCount + 1);
         }
 
+        const nested = findPdfInHtml(html, res.url || cleanUrl);
         if (nested && nested !== cleanUrl && nested !== url && nested !== res.url) {
           logDebug('NESTED', `Gefundener PDF-Viewer-Link im HTML: ${nested}`);
-          return fetchPdfInPage(nested, _depth + 1, _waitCount, triggerFrame);
+          return fetchPdfInPage(nested, _depth + 1, _waitCount);
         }
 
         logDebug('HTML_PEEK', `HTML von ${cleanUrl.split('?')[0]} (${buf.byteLength} B): ${snippet}`);
       }
-      if (triggerFrame) { try { triggerFrame.remove(); } catch {} }
       return null;
     } catch (err) {
-      if (triggerFrame) { try { triggerFrame.remove(); } catch {} }
       logDebug('DOWNLOAD_ERR', `Fehler beim Tab-Download: ${err?.message || err}`);
       return null; // z.B. CORS -> Hintergrund versucht es erneut
     }
@@ -581,11 +583,14 @@
 
     // 1. Suche nach iframe, embed, object oder frame
     const frameMatches = [
-      ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
       ...html.matchAll(/<embed[^>]+src=["']([^"']+)["']/gi),
       ...html.matchAll(/<object[^>]+data=["']([^"']+)["']/gi),
+      ...html.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi),
       ...html.matchAll(/<frame[^>]+src=["']([^"']+)["']/gi)
     ];
+    // Nur Rahmen übernehmen, die wirklich nach einem Dokument aussehen. Früher
+    // wurde hier jeder beliebige Rahmen akzeptiert - auf Viewer-Seiten landete
+    // der Download damit im Cookie-Banner statt im PDF.
     for (const m of frameMatches) {
       let src = m[1]?.trim();
       if (!src || src.startsWith('javascript:') || src.startsWith('about:') || NON_PDF_EXT.test(src) || NON_PDF_PATH.test(src)) continue;
@@ -593,7 +598,6 @@
       try {
         const resolved = new URL(src, baseUrl).href;
         if (resolved !== baseUrl && isProbablePdfUrl(resolved)) return resolved;
-        if (resolved !== baseUrl && !NON_PDF_EXT.test(resolved) && !NON_PDF_PATH.test(resolved)) return resolved;
       } catch { /* ignore */ }
     }
 

@@ -32,8 +32,11 @@ Mängel, nicht das Urteil.
    „Zustandsbericht", „Gutachten", „Prüfbericht" oder beliebige `.pdf`-Links und liest nebenbei
    FIN, Kilometerstand, Erstzulassung und Preis aus der Seite.
    Ohne gefundenes Dokument erscheint kein Panel.
-2. **Laden** – holt die PDFs zuerst im Seitenkontext (nutzt also die bestehende Anmeldung
-   beim Händler-/Auktionsportal) und fällt bei CORS-Blockaden auf den Hintergrunddienst zurück.
+2. **Laden** – holt Dokumente vom selben Ursprung wie die Fahrzeugseite direkt im
+   Seitenkontext; alles andere lädt der Hintergrunddienst, der als First-Party-Anfrage
+   läuft und die bestehende Anmeldung beim Händler-/Auktionsportal mitschickt. Wird das
+   Dokument erst erzeugt, wartet die Extension auf derselben Adresse und öffnet sie
+   dazwischen einmal kurz in einem Hintergrund-Tab.
 3. **Lesen** – extrahiert den Text lokal mit **pdf.js**, spaltenerhaltend, damit Tabellen aus
    Zustandsberichten erhalten bleiben. Siehe [Vollständigkeit](#vollständigkeit).
 4. **Analysieren** – OpenRouter (Standard `amazon/nova-2-lite-v1`) mit **Structured Output**
@@ -244,6 +247,7 @@ extension/
   vendor/pdfjs/            pdf.js 3.11.174 (Apache-2.0), lokal eingebunden
 test/
   e2e.mjs                  End-to-End-Test mit echtem Chromium
+  bca-viewpdf.mjs          Dokumentenabruf über zwei Origins (BCA-Topologie)
   make-fixtures.py         erzeugt die Test-PDFs neu
   fixtures/                Testseiten, Test-PDFs, Mock-Antwort
 ```
@@ -253,6 +257,7 @@ test/
 ```bash
 npm install -D playwright        # Chromium wird benötigt
 node test/e2e.mjs
+node test/bca-viewpdf.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension
@@ -277,17 +282,28 @@ ungepackt in Chromium und prüft 95 Punkte, unter anderem:
   Toolbar-Abzeichen, Rückhol-Pille, Esc-Kürzel, Popup-Zustand
 - Aufklapp-Animation, Filter, Einklappen, Optionsseite, reduzierte Bewegung, keine SW-Fehler
 
-Beim ersten Lauf erzeugt der Test mit `openssl` ein selbstsigniertes Wegwerf-Zertifikat für
-`de.bca-europe.com` unter `test/fixtures/cert/` (nicht eingecheckt) und startet den Browser
-ohne Umgebungs-Proxy.
+`test/bca-viewpdf.mjs` bildet zusätzlich die echte BCA-Topologie nach: Fahrzeugseite und
+Dokument liegen auf **verschiedenen Origins**, das Dokument ist nur mit Session-Cookie
+abrufbar und entsteht in einem der beiden Fälle erst, wenn das JavaScript der Portalseite
+läuft. Der Test prüft 14 Punkte – unter anderem, dass der Abruf über den Hintergrunddienst
+läuft (kein CORS-Fehler in der Seite), dass jede Anfrage die Session trägt, dass der
+Warte-Poll nicht auf einen fremden Endpunkt abbiegt und dass die Seite dafür als echtes
+Dokument geöffnet wird statt als iFrame.
+
+Beim ersten Lauf erzeugen die Tests mit `openssl` selbstsignierte Wegwerf-Zertifikate für
+die Testhosts unter `test/fixtures/cert/` bzw. `test/fixtures/cert-<host>/` (nicht
+eingecheckt) und starten den Browser ohne Umgebungs-Proxy.
 
 Ist Chromium an einem anderen Ort installiert: `CHROME_PATH=/pfad/zu/chrome node test/e2e.mjs`.
 Mit `MOCK_DELAY_MS=2000` lässt sich der Ladezustand in Ruhe betrachten.
 
 ## Grenzen
 
-- PDFs, die sich nur über ein Formular (POST) oder reines JavaScript herunterladen lassen,
-  kann die Extension nicht abrufen; sie meldet das im Panel.
+- PDFs, die sich nur über ein Formular (POST) herunterladen lassen, kann die Extension
+  nicht abrufen; sie meldet das im Panel. Erzeugt das Portal das Dokument dagegen erst
+  beim Öffnen der Seite, öffnet die Extension die Adresse einmal kurz in einem
+  Hintergrund-Tab und schließt ihn wieder – anders lässt sich das Skript der Portalseite
+  nicht anstoßen.
 - Passwortgeschützte PDFs werden nicht geöffnet.
 - Die Auswertung ist so gut wie das Dokument: Was nicht im Zustandsbericht steht, taucht auch
   nicht im Panel auf, und die Kaufempfehlung kann nur bewerten, was dokumentiert ist. Deshalb
