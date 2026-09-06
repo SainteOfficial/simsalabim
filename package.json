@@ -7,7 +7,7 @@
     "build": "vite build",
     "dev": "vite build --watch --mode development",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node test/dist-current.mjs && node test/e2e.mjs && node test/bca-viewpdf.mjs && node test/tabs-sparse.mjs && node test/chat.mjs && node test/empty-recheck.mjs && node test/handoff.mjs"
+    "test": "npm run build && node test/dist-current.mjs && node test/e2e.mjs && node test/bca-viewpdf.mjs && node test/tabs-sparse.mjs && node test/chat.mjs && node test/empty-recheck.mjs && node test/handoff.mjs && node test/equipment-print.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

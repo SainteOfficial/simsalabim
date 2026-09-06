@@ -635,7 +635,7 @@ function normalizeVerdict(v) {
   };
 }
 
-function buildResult({ raw, defects, tires, missingInfo, vehicle, confidence }) {
+function buildResult({ raw, defects, tires, equipment, missingInfo, vehicle, confidence }) {
   const counts = { kritisch: 0, mittel: 0, gering: 0, hinweis: 0 };
   let costSum = 0;
   let hasCost = false;
@@ -660,6 +660,7 @@ function buildResult({ raw, defects, tires, missingInfo, vehicle, confidence }) 
           : null,
     defects,
     tires: (tires || []).slice(0, 10),
+    equipment: equipment || [],
     missing_info: (missingInfo || []).slice(0, 8),
     confidence: typeof confidence === 'number' ? confidence : null,
     verdict: normalizeVerdict(raw?.verdict),
@@ -903,6 +904,7 @@ async function analyze({ tabId, pageContext, docs, force }) {
 
       const defects = mergeDefects(partials.map((p) => p?.defects || []));
       const tires = dedupeTires(partials.flatMap((p) => p?.tires || []));
+      const equipment = dedupeEquipment(partials.flatMap((p) => p?.equipment || []));
       const missingInfo = [...new Set(partials.flatMap((p) => p?.missing_info || []))];
       const vehicle = {};
       for (const p of partials) {
@@ -948,6 +950,7 @@ async function analyze({ tabId, pageContext, docs, force }) {
         },
         defects: finalDefects,
         tires,
+        equipment,
         missingInfo,
         vehicle,
         confidence
@@ -996,6 +999,7 @@ async function analyze({ tabId, pageContext, docs, force }) {
         raw,
         defects: mergeDefects([raw?.defects || []]),
         tires: dedupeTires(raw?.tires || []),
+        equipment: dedupeEquipment(raw?.equipment || []),
         missingInfo: raw?.missing_info || [],
         vehicle: raw?.vehicle,
         confidence: raw?.confidence
@@ -1052,6 +1056,26 @@ async function analyze({ tabId, pageContext, docs, force }) {
     running.delete(tabId);
     stopKeepAlive();
   }
+}
+
+/** Ausstattung aus mehreren Teilen zusammenführen, ohne Dubletten. */
+function dedupeEquipment(list) {
+  const seen = new Map();
+  for (const item of list || []) {
+    const name = String(item?.name || '').trim().slice(0, 60);
+    if (!name) continue;
+    const key = name.toLowerCase().replace(/[^a-z0-9äöüß]/g, '');
+    if (!key) continue;
+    const prev = seen.get(key);
+    // Einmal als werthaltig erkannt bleibt werthaltig - ein Teil des Dokuments
+    // kann den Zusammenhang kennen, den ein anderes nicht sieht.
+    if (prev) prev.value_relevant = prev.value_relevant || Boolean(item.value_relevant);
+    else seen.set(key, { name, value_relevant: Boolean(item.value_relevant) });
+  }
+  // Werthaltiges zuerst, sonst alphabetisch.
+  return [...seen.values()]
+    .sort((a, b) => Number(b.value_relevant) - Number(a.value_relevant) || a.name.localeCompare(b.name, 'de'))
+    .slice(0, 80);
 }
 
 function dedupeTires(tires) {

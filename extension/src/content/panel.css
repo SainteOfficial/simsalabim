@@ -573,6 +573,25 @@ table.vms-tires { width: 100%; border-collapse: collapse; }
 .vms-callout ul { margin: 0; padding-left: 19px; display: flex; flex-direction: column; gap: 3px; }
 .vms-callout li { color: var(--text); }
 
+/* Ausstattung: zweispaltig, damit lange Listen nicht endlos werden */
+.vms-equip-list {
+  margin: 6px 0 0;
+  padding: 0 2px;
+  list-style: none;
+  columns: 2;
+  column-gap: 14px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.vms-equip-list li {
+  break-inside: avoid;
+  padding: 1.5px 0;
+}
+.vms-equip-list li.value {
+  color: var(--text);
+  font-weight: 550;
+}
+
 /* Aufklappbare Blöcke */
 .vms-fold {
   margin-top: 10px;

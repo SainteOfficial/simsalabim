@@ -98,6 +98,12 @@ export const ThumbIcon = ({ size = 15 }: P) => (
   </svg>
 );
 
+export const StarIcon = ({ size = 14 }: P) => (
+  <svg {...s(size, 1.9)}>
+    <path d="M12 4l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4-3.9-3.8 5.4-.8z" />
+  </svg>
+);
+
 export const CheckBig = ({ size = 26 }: P) => (
   <svg {...s(size, 2)}>
     <circle cx="12" cy="12" r="9" />

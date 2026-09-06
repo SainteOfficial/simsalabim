@@ -21,6 +21,8 @@ export type Tire = {
   note: string | null;
 };
 
+export type Equipment = { name: string; value_relevant: boolean };
+
 export type NegotiationPoint = { point: string; amount_eur: number | null };
 
 export type Verdict = {
@@ -74,6 +76,7 @@ export type AnalysisResult = {
   total_estimated_repair_cost_eur: number | null;
   defects: Defect[];
   tires: Tire[];
+  equipment: Equipment[];
   missing_info: string[];
   confidence: number | null;
   verdict: Verdict;

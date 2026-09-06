@@ -8,7 +8,7 @@
  * PROMPT_VERSION geht in den Cache-Key ein: Prompt ändern => Cache wird ungültig.
  */
 
-export const PROMPT_VERSION = 7;
+export const PROMPT_VERSION = 8;
 
 /* ------------------------------------------------------------- Bausteine */
 
@@ -72,6 +72,32 @@ const DEFECT_ITEM = {
     quote: {
       type: ['string', 'null'],
       description: 'Wörtliches Zitat aus dem Dokument als Beleg, max. 160 Zeichen.'
+    }
+  }
+};
+
+/*
+ * Ausstattung ist beim Auktionskauf ein Preisfaktor: dieselbe Baureihe mit
+ * Anhängerkupplung, Navi und Matrix-Licht ist deutlich mehr wert. Deshalb wird
+ * sie mitgelesen - getrennt von den Mängeln, damit die Liste sachlich bleibt.
+ */
+const EQUIPMENT_ITEM = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'value_relevant'],
+  properties: {
+    name: {
+      type: 'string',
+      description: 'Bezeichnung wie im Dokument, auf das Wesentliche gekürzt. Max. 60 Zeichen.'
+    },
+    value_relevant: {
+      type: 'boolean',
+      description:
+        'true bei Ausstattung, die den Wiederverkaufswert spürbar hebt: Anhängerkupplung, ' +
+        'Navigation, Automatikgetriebe, Matrix-/LED-Scheinwerfer, Lederausstattung, ' +
+        'Panorama-/Schiebedach, Standheizung, adaptiver Tempomat, Allradantrieb, ' +
+        'Luftfederung, Head-up-Display, elektrische Heckklappe, Anhängerkupplung, ' +
+        'Sitzheizung, hochwertiges Soundsystem, Sportsitze. Sonst false.'
     }
   }
 };
@@ -182,7 +208,7 @@ export const DEFECT_SCHEMA = {
     additionalProperties: false,
     required: [
       'vehicle', 'report_found', 'overall_condition', 'summary',
-      'total_estimated_repair_cost_eur', 'defects', 'tires', 'missing_info',
+      'total_estimated_repair_cost_eur', 'defects', 'tires', 'equipment', 'missing_info',
       'confidence', 'verdict'
     ],
     properties: {
@@ -202,6 +228,11 @@ export const DEFECT_SCHEMA = {
       },
       defects: { type: 'array', items: DEFECT_ITEM },
       tires: { type: 'array', items: TIRE_ITEM },
+      equipment: {
+        type: 'array',
+        items: EQUIPMENT_ITEM,
+        description: 'Serien- und Sonderausstattung aus dem Dokument. Leer, wenn keine genannt.'
+      },
       missing_info: {
         type: 'array',
         items: { type: 'string' },
@@ -223,12 +254,13 @@ export const CHUNK_SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['vehicle', 'report_found', 'defects', 'tires', 'missing_info', 'confidence'],
+    required: ['vehicle', 'report_found', 'defects', 'tires', 'equipment', 'missing_info', 'confidence'],
     properties: {
       vehicle: VEHICLE_PROPS,
       report_found: { type: 'boolean' },
       defects: { type: 'array', items: DEFECT_ITEM },
       tires: { type: 'array', items: TIRE_ITEM },
+      equipment: { type: 'array', items: EQUIPMENT_ITEM },
       missing_info: { type: 'array', items: { type: 'string' } },
       confidence: { type: 'number' }
     }
@@ -275,7 +307,8 @@ const BASE_RULES = [
   '2. Kosten nur übernehmen, wenn sie explizit im Dokument stehen. Sonst null.',
   '3. Jeder Mangel bekommt ein wörtliches Zitat als Beleg ("quote").',
   '4. Doppelte Einträge zusammenfassen (gleicher Schaden auf mehreren Seiten = ein Eintrag).',
-  '5. Reine Ausstattungslisten, Werbetexte, AGB und Händlerdaten sind KEINE Mängel.',
+  '5. Ausstattungslisten, Werbetexte, AGB und Händlerdaten sind KEINE Mängel. Die',
+  '   Ausstattung gehört aber vollständig nach "equipment" - sie bestimmt den Wert mit.',
   '6. Positive Aussagen ("keine Beanstandung", "i.O.", "ohne Befund") sind KEINE Mängel.',
   '   ABER: "kein Abzug" bewertet nur den Preis, nicht den Zustand - ein so markierter',
   '   Befund bleibt ein Eintrag (severity "hinweis").',

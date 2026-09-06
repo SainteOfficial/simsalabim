@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ExternalIcon,
   SearchIcon,
+  StarIcon,
   TireIcon
 } from '@/content/tabs/icons';
 import { PageDamages } from '@/content/views/page-damages';
@@ -82,6 +83,7 @@ export function DefectTab({
             </div>
           </div>
         )}
+        <EquipmentBlock result={r} expandAll={expandAll} />
         <Coverage result={r} />
       </>
     );
@@ -181,6 +183,7 @@ export function DefectTab({
       </div>
 
       <Tires result={r} expandAll={expandAll} />
+      <EquipmentBlock result={r} expandAll={expandAll} />
       {r.missing_info?.length ? (
         <div className="vms-missing">
           <strong>Nicht im Dokument:</strong> {r.missing_info.join(', ')}
@@ -326,6 +329,53 @@ function Tires({ result, expandAll }: { result: AnalysisResult; expandAll: boole
         </tbody>
       </table>
     </details>
+  );
+}
+
+/**
+ * Ausstattung. Beim Auktionskauf ein Preisfaktor - dieselbe Baureihe mit
+ * Anhängerkupplung und Navi ist mehr wert. Das Werthaltige steht deshalb
+ * sichtbar oben, die vollständige Liste bleibt einen Klick entfernt.
+ */
+function EquipmentBlock({ result, expandAll }: { result: AnalysisResult; expandAll: boolean }) {
+  const items = result.equipment || [];
+  if (!items.length) return null;
+  const valuable = items.filter((e) => e.value_relevant);
+
+  return (
+    <>
+      {valuable.length ? (
+        <div className="vms-app px-0.5 pb-1.5 pt-0.5">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mr-0.5 text-[11px] font-semibold uppercase tracking-wide text-panel-dim">
+              Werthaltig
+            </span>
+            {valuable.map((e) => (
+              <span
+                className="vms-equip-chip rounded-full bg-panel-good/[0.12] px-2 py-0.5 text-[11.5px] text-panel-good"
+                key={e.name}
+              >
+                {e.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <details className="vms-fold" open={expandAll}>
+        <summary>
+          <StarIcon />
+          <span>Ausstattung ({items.length})</span>
+        </summary>
+        <ul className="vms-equip-list">
+          {items.map((e) => (
+            <li className={e.value_relevant ? 'value' : ''} key={e.name}>
+              {e.name}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </>
   );
 }
 

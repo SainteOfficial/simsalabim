@@ -17,7 +17,7 @@ Die Rechnung und die Einschätzung liegen jeweils einen Klick daneben.
 
 | Tab | Inhalt |
 | --- | --- |
-| **Mängel** (Start) | Schäden von der Seite, dann die Liste aus dem PDF – Schwere, TÜV-Relevanz, Kosten, Beleg-Zitat. Keine Meinung. |
+| **Mängel** (Start) | Schäden von der Seite, dann die Liste aus dem PDF – Schwere, TÜV-Relevanz, Kosten, Beleg-Zitat. Darunter Reifen und Ausstattung. Keine Meinung. |
 | **Berechnet** | Kostenrechnung aus belegten Beträgen; nennt das Dokument keine, tritt der gezählte Befund an ihre Stelle. Dazu Bereichsverteilung und Verhandlungshebel |
 | **Meinung** | Kaufempfehlung mit Zustands-Score, Begründungen, Ausschlusskriterien – und bei „Unklar“ die fehlenden Angaben |
 
@@ -72,6 +72,28 @@ nichts da und es sieht aus, als sei die Frage verloren gegangen.
 
 Wer den Chat nicht braucht, blendet ihn über das Sprechblasen-Symbol im Fuß des Panels aus;
 derselbe Knopf holt ihn zurück. Der Verlauf bleibt dabei stehen.
+
+## Ausstattung
+
+Beim Auktionskauf ist die Ausstattung ein Preisfaktor: dieselbe Baureihe mit Anhängerkupplung,
+Navi und Matrix-Licht ist deutlich mehr wert. Sie wird deshalb mitgelesen – **getrennt von den
+Mängeln**, damit die Mängelliste sachlich bleibt.
+
+Werthaltiges steht als Chip direkt unter der Mängelliste, die vollständige Liste einen Klick
+darunter. Was als werthaltig gilt, steht im Schema: Anhängerkupplung, Navigation, Automatik,
+Matrix-/LED-Licht, Leder, Panoramadach, Standheizung, adaptiver Tempomat, Allrad, Luftfederung,
+Head-up-Display, elektrische Heckklappe, Sitzheizung, Soundsystem, Sportsitze.
+
+## Blatt zum Ausdrucken
+
+Der Knopf **Blatt** im Fuß öffnet alles Wichtige auf einer Seite: Fahrzeugdaten, Preisrechnung,
+alle Mängel mit Kosten und Beleg-Zitat, Reifen, Ausstattung und die Einschätzung. Zum Drucken
+oder als PDF ablegen – gedacht zum Mitnehmen zur Auktion, statt am Bildschirm durch drei Tabs
+zu klicken.
+
+Das Blatt ist ein eigenständiges Dokument ohne Skripte und ohne externe Dateien: es öffnet als
+Blob-URL in einem neuen Tab, damit die Sicherheitsregeln der Portalseite dort nicht mitgelten.
+Im Fuß stehen Zeitpunkt, Quelle und der Hinweis, dass es keine Besichtigung ersetzt.
 
 ## Wenn die Auswertung leer bleibt
 
@@ -330,6 +352,7 @@ test/
   chat.mjs                 Chat: Kontext, Verlaufsdeckel, Schreibanzeige
   empty-recheck.mjs        Gegenprobe bei leerer Mängelliste
   handoff.mjs              Übergabe großer PDFs, paralleles Laden
+  equipment-print.mjs      Ausstattung und das Blatt zum Ausdrucken
   dist-current.mjs         wacht darüber, dass dist/ zum Quellcode passt
   bca-viewpdf.mjs          Dokumentenabruf über zwei Origins (BCA-Topologie)
   tabs-sparse.mjs          Berechnet/Meinung bei dünner Datenlage
@@ -414,6 +437,7 @@ node test/tabs-sparse.mjs
 node test/chat.mjs
 node test/empty-recheck.mjs
 node test/handoff.mjs
+node test/equipment-print.mjs
 ```
 
 Der Test startet einen lokalen Fixture-Server und einen OpenRouter-Mock, lädt die Extension

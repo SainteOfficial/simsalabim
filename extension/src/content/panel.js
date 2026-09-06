@@ -1,4 +1,6 @@
 /* eslint-env browser */
+import { openPrintSheet } from '@/content/print-sheet';
+
 /**
  * Content-Script: erkennt Fahrzeugseiten + PDF-Links, lädt die PDFs mit der
  * Session der Seite herunter und zeigt das Ergebnis in einem Panel oben rechts.
@@ -1018,6 +1020,8 @@
       runAnalysis({ force: true });
     } else if (act === 'options') {
       send({ type: 'OPEN_OPTIONS' });
+    } else if (act === 'print') {
+      if (state.result) openPrintSheet(state.result, state.context, location.href);
     } else if (act === 'copy') {
       copyResult(btn);
     } else if (act === 'tab') {
@@ -1439,6 +1443,7 @@
           <button class="vms-icon sm ${state.chatHidden ? '' : 'on'}" data-act="toggle-chat"
             aria-pressed="${!state.chatHidden}" aria-label="Chat ein-/ausblenden"
             title="${state.chatHidden ? 'Chat einblenden' : 'Chat ausblenden'}">${chatIcon()}</button>
+          ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="print" title="Alles auf einem Blatt – zum Drucken oder als PDF">Blatt</button>' : ''}
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="copy">Kopieren</button>' : ''}
           ${state.status === 'done' ? '<button class="vms-ghost sm" data-act="rerun" title="Cache umgehen und neu auswerten">Neu</button>' : ''}
           <button class="vms-ghost sm" data-act="options">Einstellungen</button>
